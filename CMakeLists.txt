@@ -97,10 +97,13 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.service
 install(FILES config/layout-fix.conf DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/xdg/layout-fix)
 install(FILES data/dicts/uk_UA.dic data/dicts/uk_UA.COPYRIGHT
         DESTINATION ${CMAKE_INSTALL_DATADIR}/layout-fix)
+install(FILES LICENSE debian/copyright DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "layout-fix")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_LICENSE "GPL-3.0-or-later")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
   "Keyboard layout correction for X11 and Cinnamon")
 set(CPACK_PACKAGE_DESCRIPTION

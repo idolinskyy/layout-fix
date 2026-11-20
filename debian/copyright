@@ -1,0 +1,27 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: layout-fix
+
+Files: \*
+Copyright: 2026 layout-fix contributors
+License: GPL-3+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+.
+The full license text is installed as
+/usr/share/doc/layout-fix/LICENSE and is also available in the source
+repository as LICENSE.
+
+Files: data/dicts/uk_UA.dic
+Copyright: The LibreOffice Project
+License: MPL-2.0
+The fallback Ukrainian dictionary is distributed under the Mozilla
+Public License 2.0. See data/dicts/uk_UA.COPYRIGHT for its upstream
+copyright and licensing information. The license text is available at
+https://www.mozilla.org/MPL/2.0/.
