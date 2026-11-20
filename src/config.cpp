@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <stdexcept>
+#include <exception>
 
 namespace layoutfix {
 namespace {
@@ -71,13 +71,17 @@ Hotkey parse_hotkey(std::string_view text) {
     return key;
 }
 
-std::string default_config_path() {
+std::string default_user_config_path() {
     const char* xdg = std::getenv("XDG_CONFIG_HOME");
     std::filesystem::path dir = xdg != nullptr && xdg[0] != '\0'
                                     ? std::filesystem::path(xdg)
                                     : std::filesystem::path(std::getenv("HOME") ? std::getenv("HOME") : "") /
                                           ".config";
-    const auto user_config = dir / "layout-fix" / "layout-fix.conf";
+    return (dir / "layout-fix" / "layout-fix.conf").string();
+}
+
+std::string default_config_path() {
+    const std::filesystem::path user_config = default_user_config_path();
     if (std::filesystem::is_regular_file(user_config)) {
         return user_config.string();
     }
@@ -111,6 +115,7 @@ std::string default_config_path() {
 Config load_config(const std::string& path, bool debug_keys) {
     Config cfg;
     cfg.config_path = path;
+    cfg.user_config_path = default_user_config_path();
     cfg.debug_keys = debug_keys;
     if (path.empty() || !std::filesystem::exists(path)) {
         if (!path.empty()) {
@@ -158,6 +163,44 @@ Config load_config(const std::string& path, bool debug_keys) {
         }
     }
     return cfg;
+}
+
+bool save_config_file(const Config &config, const std::string &path) {
+    if (path.empty()) {
+        return false;
+    }
+    const std::filesystem::path config_path(path);
+    std::error_code error;
+    if (!config_path.parent_path().empty()) {
+        std::filesystem::create_directories(config_path.parent_path(), error);
+        if (error) {
+            return false;
+        }
+    }
+
+    std::ofstream out(config_path, std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+    out << "min-length=" << config.min_length << '\n';
+    if (!config.dict_en.empty()) {
+        out << "dict-en=" << config.dict_en << '\n';
+    }
+    if (!config.dict_uk.empty()) {
+        out << "dict-uk=" << config.dict_uk << '\n';
+    }
+    out << "exclude=";
+    for (std::size_t i = 0; i < config.exclude.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        out << config.exclude[i];
+    }
+    out << '\n'
+        << "pause-key=" << config.pause_key << '\n'
+        << "undo-key=" << config.undo_key << '\n';
+    out.flush();
+    return out.good();
 }
 
 }  // namespace layoutfix

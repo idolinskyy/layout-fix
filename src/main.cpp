@@ -57,6 +57,7 @@ private:
 
 int main(int argc, char** argv) {
     std::string config_path = layoutfix::default_config_path();
+    bool config_path_explicit = false;
     bool debug_keys = false;
     bool check_only = false;
     for (int i = 1; i < argc; ++i) {
@@ -75,6 +76,7 @@ int main(int argc, char** argv) {
         }
         if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
+            config_path_explicit = true;
             continue;
         }
         std::cerr << "невідомий аргумент: " << arg << '\n';
@@ -88,7 +90,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    const auto config = layoutfix::load_config(config_path, debug_keys);
+    auto config = layoutfix::load_config(config_path, debug_keys);
+    config.config_path_explicit = config_path_explicit;
     layoutfix::App app;
     return app.run(config, check_only);
 }

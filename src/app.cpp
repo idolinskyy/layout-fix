@@ -3,16 +3,22 @@
 #include <QAction>
 #include <QColor>
 #include <QCoreApplication>
-#include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QEventLoop>
+#include <QFormLayout>
 #include <QFont>
 #include <QIcon>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPlainTextEdit>
 #include <QPixmap>
+#include <QSpinBox>
 #include <QSystemTrayIcon>
-#include <QUrl>
+#include <QVBoxLayout>
 #endif
 
 #include "app.hpp"
@@ -39,8 +45,6 @@
 #include <array>
 #include <chrono>
 #include <csignal>
-#include <filesystem>
-#include <fstream>
 #include <poll.h>
 #include <string>
 #include <vector>
@@ -112,7 +116,7 @@ bool is_command_modifier(unsigned state) {
 
 } // namespace
 
-int App::run(const Config &config, bool check_only) {
+int App::run(Config config, bool check_only) {
   log::set_debug_keys(config.debug_keys);
 
   XConnection x11;
@@ -195,11 +199,11 @@ int App::run(const Config &config, bool check_only) {
     return 1;
   }
 
-  const auto pause_key = parse_hotkey(config.pause_key);
-  const auto undo_key = parse_hotkey(config.undo_key);
-  const unsigned pause_kc =
+  auto pause_key = parse_hotkey(config.pause_key);
+  auto undo_key = parse_hotkey(config.undo_key);
+  unsigned pause_kc =
       keycode_of(x11, XStringToKeysym(pause_key.keysym.c_str()));
-  const unsigned undo_kc =
+  unsigned undo_kc =
       keycode_of(x11, XStringToKeysym(undo_key.keysym.c_str()));
   const unsigned break_kc = keycode_of(x11, XK_Break);
   std::vector<unsigned> command_keys;
@@ -279,7 +283,7 @@ int App::run(const Config &config, bool check_only) {
   QAction *pause_action = tray_menu.addAction("Пауза");
   QMenu *language_menu = tray_menu.addMenu("Перемкнути розкладку");
   std::vector<std::pair<Lang, QAction *>> language_actions;
-  QAction *config_action = tray_menu.addAction("Відкрити конфіг");
+  QAction *settings_action = tray_menu.addAction("Налаштування…");
   QAction *about_action = tray_menu.addAction("Про layout-fix");
   tray_menu.addSeparator();
   QAction *quit_action = tray_menu.addAction("Вийти");
@@ -356,28 +360,113 @@ int App::run(const Config &config, bool check_only) {
     log::info(paused ? "пауза" : "знову слухаю");
     update_tray();
   });
-  QObject::connect(config_action, &QAction::triggered, [&] {
-    const std::filesystem::path path(config.config_path);
-    std::error_code error;
-    if (!path.parent_path().empty()) {
-      std::filesystem::create_directories(path.parent_path(), error);
+  QObject::connect(settings_action, &QAction::triggered, [&] {
+    QDialog dialog;
+    dialog.setWindowTitle(QStringLiteral("Налаштування layout-fix"));
+    dialog.setMinimumWidth(440);
+    auto *form = new QFormLayout;
+    auto *minimum_length = new QSpinBox;
+    minimum_length->setRange(1, 24);
+    minimum_length->setValue(config.min_length);
+    form->addRow(QStringLiteral("Мінімальна довжина слова"), minimum_length);
+
+    auto *pause_hotkey = new QLineEdit(QString::fromStdString(config.pause_key));
+    pause_hotkey->setPlaceholderText(QStringLiteral("Pause або F8"));
+    form->addRow(QStringLiteral("Пауза / продовжити"), pause_hotkey);
+
+    auto *undo_hotkey = new QLineEdit(QString::fromStdString(config.undo_key));
+    undo_hotkey->setPlaceholderText(QStringLiteral("Shift+Pause"));
+    form->addRow(QStringLiteral("Скасувати останнє виправлення"), undo_hotkey);
+
+    auto *excluded_windows = new QPlainTextEdit;
+    excluded_windows->setPlaceholderText(
+        QStringLiteral("Одна частина WM_CLASS на рядок"));
+    QStringList excluded_lines;
+    for (const auto &name : config.exclude) {
+      excluded_lines.push_back(QString::fromStdString(name));
     }
-    if (!std::filesystem::exists(path)) {
-      std::ofstream file(path);
-      if (file) {
-        file << "min-length=3\n"
-                "exclude=gnome-terminal,terminator,xterm,cinnamon-screensaver,"
-                "org.cinnamon.ScreenSaver,gcr-prompter,layout-fix\n"
-                "pause-key=Pause\n"
-                "undo-key=Shift+Pause\n";
+    excluded_windows->setPlainText(excluded_lines.join('\n'));
+    excluded_windows->setMinimumHeight(120);
+    form->addRow(QStringLiteral("Не виправляти у вікнах"), excluded_windows);
+
+    auto *help = new QLabel(QStringLiteral(
+        "Зміни збережуться у користувацький конфіг і застосуються одразу."));
+    help->setWordWrap(true);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save |
+                                        QDialogButtonBox::Cancel);
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addLayout(form);
+    layout->addWidget(help);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
+                     &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
+                     &QDialog::reject);
+
+    const bool was_paused = paused;
+    paused = true;
+    clear_input();
+    undo.valid = false;
+    update_tray();
+    const int result = dialog.exec();
+    listener.drain();
+    listener.take();
+    focus.drain();
+    clear_input();
+    paused = was_paused;
+    update_tray();
+    if (result != QDialog::Accepted) {
+      return;
+    }
+
+    const std::string new_pause_text = pause_hotkey->text().trimmed().toStdString();
+    const std::string new_undo_text = undo_hotkey->text().trimmed().toStdString();
+    const Hotkey new_pause = parse_hotkey(new_pause_text);
+    const Hotkey new_undo = parse_hotkey(new_undo_text);
+    const unsigned new_pause_kc =
+        keycode_of(x11, XStringToKeysym(new_pause.keysym.c_str()));
+    const unsigned new_undo_kc =
+        keycode_of(x11, XStringToKeysym(new_undo.keysym.c_str()));
+    if (new_pause_kc == 0 || new_undo_kc == 0 ||
+        (new_pause_kc == new_undo_kc && new_pause.shift == new_undo.shift)) {
+      QMessageBox::warning(nullptr, QStringLiteral("Неправильні клавіші"),
+                           QStringLiteral("Вкажи дві різні доступні клавіші."));
+      listener.drain();
+      listener.take();
+      focus.drain();
+      return;
+    }
+
+    Config updated = config;
+    updated.min_length = minimum_length->value();
+    updated.pause_key = new_pause_text;
+    updated.undo_key = new_undo_text;
+    updated.exclude.clear();
+    for (const auto &line : excluded_windows->toPlainText().split('\n')) {
+      const auto name = line.trimmed();
+      if (!name.isEmpty()) {
+        updated.exclude.push_back(name.toStdString());
       }
     }
-    if (!QDesktopServices::openUrl(
-            QUrl::fromLocalFile(QString::fromStdString(path.string())))) {
-      log::error("не вдалося відкрити конфіг у редакторі");
-    } else {
-      log::info("зміни конфігу набудуть чинності після перезапуску");
+    const std::string save_path = config.config_path_explicit
+                                      ? config.config_path
+                                      : config.user_config_path;
+    updated.config_path = save_path;
+    if (!save_config_file(updated, save_path)) {
+      QMessageBox::critical(nullptr, QStringLiteral("Не вдалося зберегти"),
+                            QStringLiteral("Перевір права доступу до конфігу."));
+      listener.drain();
+      listener.take();
+      focus.drain();
+      return;
     }
+
+    config = std::move(updated);
+    pause_key = new_pause;
+    undo_key = new_undo;
+    pause_kc = new_pause_kc;
+    undo_kc = new_undo_kc;
+    log::info("налаштування збережено й застосовано");
   });
   QObject::connect(about_action, &QAction::triggered, [&] {
     const QString text =

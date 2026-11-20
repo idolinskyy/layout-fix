@@ -68,6 +68,8 @@ endif()
 
 add_executable(layout-fix-test
   tests/test_core.cpp
+  src/config.cpp
+  src/log.cpp
   src/utf8.cpp
   src/input/word_buffer.cpp
   src/detect/dictionary.cpp

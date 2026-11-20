@@ -7,6 +7,8 @@ namespace layoutfix {
 
 struct Config {
   std::string config_path;
+  std::string user_config_path;
+  bool config_path_explicit = false;
   int min_length = 3;
   std::string dict_en;
   std::string dict_uk;
@@ -30,5 +32,7 @@ struct Hotkey {
 Hotkey parse_hotkey(std::string_view text);
 Config load_config(const std::string &path, bool debug_keys);
 std::string default_config_path();
+std::string default_user_config_path();
+bool save_config_file(const Config &config, const std::string &path);
 
 } // namespace layoutfix

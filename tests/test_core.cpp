@@ -1,3 +1,4 @@
+#include "config.hpp"
 #include "detect/detector.hpp"
 #include "detect/dictionary.hpp"
 #include "input/echoes.hpp"
@@ -6,6 +7,7 @@
 #include "utf8.hpp"
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -27,6 +29,29 @@ void expect(bool condition, int line) {
 #define CHECK(cond) expect((cond), __LINE__)
 
 int main() {
+  const auto config_test_dir = std::filesystem::temp_directory_path() /
+        ("layout-fix-config-test-" + std::to_string(
+              std::chrono::steady_clock::now().time_since_epoch().count()));
+  layoutfix::Config saved_config;
+  saved_config.min_length = 5;
+  saved_config.dict_en = "/tmp/en_US.dic";
+  saved_config.dict_uk = "/tmp/uk_UA.dic";
+  saved_config.exclude = {"terminal-a", "terminal-b"};
+  saved_config.pause_key = "F8";
+  saved_config.undo_key = "Shift+F8";
+  CHECK(layoutfix::save_config_file(
+        saved_config, (config_test_dir / "layout-fix.conf").string()));
+  const auto loaded_config =
+        layoutfix::load_config((config_test_dir / "layout-fix.conf").string(),
+                                           false);
+  CHECK(loaded_config.min_length == saved_config.min_length);
+  CHECK(loaded_config.dict_en == saved_config.dict_en);
+  CHECK(loaded_config.dict_uk == saved_config.dict_uk);
+  CHECK(loaded_config.exclude == saved_config.exclude);
+  CHECK(loaded_config.pause_key == saved_config.pause_key);
+  CHECK(loaded_config.undo_key == saved_config.undo_key);
+  std::filesystem::remove_all(config_test_dir);
+
   CHECK(layoutfix::utf8::casefold("Привіт") == "привіт");
   CHECK(layoutfix::utf8::casefold("HELLO") == "hello");
   CHECK(layoutfix::utf8::casefold("ҐІЇЄ") == "ґіїє");
