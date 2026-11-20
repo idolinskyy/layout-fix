@@ -12,22 +12,24 @@ namespace layoutfix {
 
 class Listener {
 public:
-    explicit Listener(XConnection& x11) : x11_(x11) {}
-    ~Listener();
-    Listener(const Listener&) = delete;
-    Listener& operator=(const Listener&) = delete;
+  explicit Listener(XConnection &x11) : x11_(x11) {}
+  ~Listener();
+  Listener(const Listener &) = delete;
+  Listener &operator=(const Listener &) = delete;
 
-    bool start();
-    void drain();
-    std::vector<RawEvent> take();
+  bool start();
+  void drain();
+  std::vector<RawEvent> take();
 
 private:
-    static void callback(XPointer closure, XRecordInterceptData* data);
+  void stop();
+  static void callback(XPointer closure, XRecordInterceptData *data);
 
-    XConnection& x11_;
-    unsigned long context_ = 0;
-    bool started_ = false;
-    std::vector<RawEvent> queue_;
+  XConnection &x11_;
+  unsigned long context_ = 0;
+  bool started_ = false;
+  bool record_done_ = false;
+  std::vector<RawEvent> queue_;
 };
 
-}  // namespace layoutfix
+} // namespace layoutfix

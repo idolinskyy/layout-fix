@@ -32,7 +32,7 @@ ctest --test-dir build --output-on-failure
 
 Другий запуск нічого не робить: уже працює один примірник.
 
-Термінали `gnome-terminal`, `terminator` і `xterm` у списку винятків. Свій список лежить у `~/.config/layout-fix/layout-fix.conf`. Зразок є в `config/layout-fix.conf`. Ім'я вікна береться з `WM_CLASS` (`xprop`).
+Термінали `gnome-terminal`, `terminator`, `xterm`, а також `cinnamon-screensaver` і `gcr-prompter`, у списку винятків. Свій список лежить у `~/.config/layout-fix/layout-fix.conf`. Зразок є в `config/layout-fix.conf`. Ім'я вікна береться з `WM_CLASS` (`xprop`). Діалог пароля polkit малюється всередині Cinnamon і в цей список не потрапляє: перед ним увімкніть паузу.
 
 Слово коротше за 3 літери не чіпається. Якщо набране вже є в словнику поточної мови, розкладка теж не змінюється.
 

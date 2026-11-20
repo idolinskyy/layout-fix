@@ -1,5 +1,6 @@
 #pragma once
 
+#include "input/echoes.hpp"
 #include "input/word_buffer.hpp"
 #include "x11/connection.hpp"
 
@@ -12,13 +13,13 @@ public:
     explicit Retype(XConnection& x11) : x11_(x11) {}
 
     bool init();
-    // Скільки подій XRecord очікувати у відповідь.
-    int replace(int delete_count, const std::vector<Stroke>& strokes);
+    // Дописує в echoes press/release у тому порядку, в якому їх побачить XRecord.
+    void replace(int delete_count, const std::vector<Stroke>& strokes, std::vector<EchoKey>& echoes);
     unsigned backspace_keycode() const { return backspace_; }
 
 private:
-    int tap(unsigned keycode);
-    int set_shift(bool down);
+    void tap(unsigned keycode, std::vector<EchoKey>& echoes);
+    void set_shift(bool down, std::vector<EchoKey>& echoes);
 
     XConnection& x11_;
     unsigned backspace_ = 0;

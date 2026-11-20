@@ -26,41 +26,41 @@ bool Retype::init() {
     return true;
 }
 
-int Retype::tap(unsigned keycode) {
+void Retype::tap(unsigned keycode, std::vector<EchoKey>& echoes) {
     auto* dpy = x11_.ctrl();
     XTestFakeKeyEvent(dpy, keycode, True, CurrentTime);
     XTestFakeKeyEvent(dpy, keycode, False, CurrentTime);
-    return 2;
+    echoes.push_back(EchoKey{keycode, true});
+    echoes.push_back(EchoKey{keycode, false});
 }
 
-int Retype::set_shift(bool down) {
+void Retype::set_shift(bool down, std::vector<EchoKey>& echoes) {
     if (down == shift_down_) {
-        return 0;
+        return;
     }
     XTestFakeKeyEvent(x11_.ctrl(), shift_, down ? True : False, CurrentTime);
+    echoes.push_back(EchoKey{shift_, down});
     shift_down_ = down;
-    return 1;
 }
 
-int Retype::replace(int delete_count, const std::vector<Stroke>& strokes) {
+void Retype::replace(int delete_count, const std::vector<Stroke>& strokes,
+                     std::vector<EchoKey>& echoes) {
     auto* dpy = x11_.ctrl();
     char map[32] = {};
     XQueryKeymap(dpy, map);
     const bool user_shift = key_down(map, shift_);
     shift_down_ = user_shift;
 
-    int echoes = 0;
-    echoes += set_shift(false);
+    set_shift(false, echoes);
     for (int i = 0; i < delete_count; ++i) {
-        echoes += tap(backspace_);
+        tap(backspace_, echoes);
     }
     for (const auto& stroke : strokes) {
-        echoes += set_shift(stroke.shift);
-        echoes += tap(stroke.keycode);
+        set_shift(stroke.shift, echoes);
+        tap(stroke.keycode, echoes);
     }
-    echoes += set_shift(user_shift);
+    set_shift(user_shift, echoes);
     XFlush(dpy);
-    return echoes;
 }
 
 }  // namespace layoutfix

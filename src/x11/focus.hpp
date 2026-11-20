@@ -13,6 +13,7 @@ public:
 
     bool install();
     void drain();
+    unsigned long window_id() const { return window_; }
     const std::string& wm_class() const { return wm_class_; }
     const std::string& wm_name() const { return wm_name_; }
     bool excluded(const std::vector<std::string>& names) const;
@@ -22,6 +23,7 @@ private:
 
     XConnection& x11_;
     unsigned long active_atom_ = 0;
+    unsigned long window_ = 0;
     std::string wm_class_;
     std::string wm_name_;
 };
