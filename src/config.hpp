@@ -15,7 +15,8 @@ struct Config {
                                    "xterm",
                                    "cinnamon-screensaver",
                                    "org.cinnamon.ScreenSaver",
-                                   "gcr-prompter"};
+                                   "gcr-prompter",
+                                   "layout-fix"};
   std::string pause_key = "Pause";
   std::string undo_key = "Shift+Pause";
   bool debug_keys = false;

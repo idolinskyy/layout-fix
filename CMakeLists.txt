@@ -50,7 +50,8 @@ configure_file(data/layout-fix.service.in
 
 target_include_directories(layout-fix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(layout-fix PRIVATE
-  LAYOUT_FIX_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/layout-fix")
+  LAYOUT_FIX_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/layout-fix"
+  LAYOUT_FIX_VERSION="${PROJECT_VERSION}")
 target_compile_options(layout-fix PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(layout-fix PRIVATE
   X11::X11

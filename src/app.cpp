@@ -8,6 +8,7 @@
 #include <QFont>
 #include <QIcon>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QSystemTrayIcon>
@@ -80,17 +81,23 @@ const char *cinnamon_source_id(Lang language) {
 }
 
 #ifdef LAYOUT_FIX_HAVE_QT_TRAY
-QIcon pause_icon(bool paused) {
+QIcon layout_icon(Lang language, bool paused) {
   QPixmap pixmap(32, 32);
   pixmap.fill(Qt::transparent);
   QPainter painter(&pixmap);
   painter.setRenderHint(QPainter::Antialiasing);
   painter.setPen(Qt::NoPen);
-  painter.setBrush(paused ? QColor("#d28b26") : QColor("#378b57"));
+  const QColor active_color("#378b57");
+  const int gray = qGray(active_color.rgb());
+  painter.setBrush(paused ? QColor(gray, gray, gray) : active_color);
   painter.drawEllipse(2, 2, 28, 28);
   painter.setPen(Qt::white);
-  painter.setFont(QFont("Sans", paused ? 16 : 17, QFont::DemiBold));
-  painter.drawText(pixmap.rect(), Qt::AlignCenter, paused ? "||" : "L");
+  painter.setFont(QFont("Sans", 10, QFont::DemiBold));
+  const char *code = language == Lang::En ? "en"
+                     : language == Lang::Uk ? "uk"
+                     : language == Lang::Ru ? "ru"
+                                            : "--";
+  painter.drawText(pixmap.rect(), Qt::AlignCenter, QString::fromLatin1(code));
   return QIcon(pixmap);
 }
 #endif
@@ -262,6 +269,8 @@ int App::run(const Config &config, bool check_only) {
   char *qt_argv[] = {qt_name, nullptr};
   QApplication qt_app(qt_argc, qt_argv);
   qt_app.setQuitOnLastWindowClosed(false);
+  QApplication::setApplicationName(QStringLiteral("layout-fix"));
+  QApplication::setApplicationVersion(QStringLiteral(LAYOUT_FIX_VERSION));
   QSystemTrayIcon tray;
   QMenu tray_menu;
   QAction *status_action = tray_menu.addAction("Стан: запускаю…");
@@ -271,6 +280,7 @@ int App::run(const Config &config, bool check_only) {
   QMenu *language_menu = tray_menu.addMenu("Перемкнути розкладку");
   std::vector<std::pair<Lang, QAction *>> language_actions;
   QAction *config_action = tray_menu.addAction("Відкрити конфіг");
+  QAction *about_action = tray_menu.addAction("Про layout-fix");
   tray_menu.addSeparator();
   QAction *quit_action = tray_menu.addAction("Вийти");
   tray.setContextMenu(&tray_menu);
@@ -325,7 +335,7 @@ int App::run(const Config &config, bool check_only) {
     for (const auto &[language, action] : language_actions) {
       action->setChecked(language == active_language);
     }
-    tray.setIcon(pause_icon(paused));
+    tray.setIcon(layout_icon(active_language, paused));
     tray.setToolTip(QStringLiteral("layout-fix · %1 · %2")
                         .arg(paused ? QStringLiteral("пауза")
                                     : QStringLiteral("працює"),
@@ -357,7 +367,7 @@ int App::run(const Config &config, bool check_only) {
       if (file) {
         file << "min-length=3\n"
                 "exclude=gnome-terminal,terminator,xterm,cinnamon-screensaver,"
-                "org.cinnamon.ScreenSaver,gcr-prompter\n"
+                "org.cinnamon.ScreenSaver,gcr-prompter,layout-fix\n"
                 "pause-key=Pause\n"
                 "undo-key=Shift+Pause\n";
       }
@@ -368,6 +378,17 @@ int App::run(const Config &config, bool check_only) {
     } else {
       log::info("зміни конфігу набудуть чинності після перезапуску");
     }
+  });
+  QObject::connect(about_action, &QAction::triggered, [&] {
+    const QString text =
+        QStringLiteral("<h3>layout-fix %1</h3>"
+                       "<p>Автоматичне виправлення розкладки для X11 і Cinnamon.</p>"
+                       "<p>Мови: English (US), українська та російська.</p>"
+                       "<p>Ліцензія коду: GPL-3.0-or-later.<br>"
+                       "Fallback-словник uk_UA: MPL-2.0.</p>")
+            .arg(QApplication::applicationVersion());
+    QMessageBox::about(nullptr, QStringLiteral("Про програму"), text);
+    update_tray();
   });
   QObject::connect(quit_action, &QAction::triggered,
                    [] { g_stop = 1; });
