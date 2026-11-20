@@ -49,6 +49,10 @@ int main() {
         Decision::Keep);
   CHECK(layoutfix::decide("yes", "нуї", english, ukrainian, 3) ==
         Decision::Keep);
+  CHECK(!english.contains("qzxjv"));
+  CHECK(!ukrainian.contains("qzxjv"));
+  CHECK(layoutfix::decide("qzxjv", "qzxjv", english, ukrainian, 3) ==
+        Decision::Keep);
 
   layoutfix::WordBuffer buffer;
   buffer.set_group(0);
@@ -110,6 +114,15 @@ int main() {
     CHECK(real.load_file(uk_path));
     CHECK(real.contains("привіт"));
     CHECK(real.contains("ПРИВІТ"));
+
+            if (real.has_morphology()) {
+                  layoutfix::Dictionary real_english;
+                  CHECK(real_english.load_file("/usr/share/hunspell/en_US.dic"));
+                  CHECK(real.contains("привіту"));
+                  CHECK(!real_english.contains("ghbdne"));
+                  CHECK(layoutfix::decide("ghbdne", "привіту", real_english, real, 3) ==
+                                    Decision::Switch);
+            }
   } else {
     std::cerr << "FAIL немає uk_UA.dic для перевірки справжнього словника\n";
     ++failures;

@@ -7,6 +7,11 @@
 #include <sstream>
 #include <string>
 
+#ifdef LAYOUT_FIX_HAVE_HUNSPELL
+#include <memory>
+#include <hunspell/hunspell.hxx>
+#endif
+
 namespace layoutfix {
 namespace {
 
@@ -34,6 +39,8 @@ bool all_digits(std::string_view text) {
 }
 
 }  // namespace
+
+Dictionary::~Dictionary() = default;
 
 void Dictionary::add_line(std::string_view line, bool& skip_count) {
     const auto stem = stem_of(line);
@@ -72,14 +79,42 @@ bool Dictionary::load_file(const std::string& path) {
     }
     std::ostringstream buffer;
     buffer << in.rdbuf();
-    return load_text(buffer.str());
+    if (!load_text(buffer.str())) {
+        return false;
+    }
+
+#ifdef LAYOUT_FIX_HAVE_HUNSPELL
+    auto affix_path = std::filesystem::path(path);
+    affix_path.replace_extension(".aff");
+    if (std::filesystem::is_regular_file(affix_path)) {
+        try {
+            hunspell_ = std::make_unique<Hunspell>(affix_path.c_str(), path.c_str());
+        } catch (...) {
+            hunspell_.reset();
+        }
+    }
+#endif
+    return true;
 }
 
 bool Dictionary::contains(std::string_view word) const {
     if (word.empty()) {
         return false;
     }
+#ifdef LAYOUT_FIX_HAVE_HUNSPELL
+    if (hunspell_) {
+        return hunspell_->spell(std::string(word)) != 0;
+    }
+#endif
     return words_.contains(utf8::casefold(word));
+}
+
+bool Dictionary::has_morphology() const {
+#ifdef LAYOUT_FIX_HAVE_HUNSPELL
+    return hunspell_ != nullptr;
+#else
+    return false;
+#endif
 }
 
 std::string resolve_dictionary(const std::string& configured,

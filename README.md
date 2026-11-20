@@ -11,7 +11,7 @@
 
 ## Збірка
 
-Потрібні пакети: `build-essential`, `cmake`, `pkg-config`, `libx11-dev`, `libxtst-dev`, `libxkbcommon-dev`, `libglib2.0-dev`, `hunspell-en-us`. Український словник демон бере з `hunspell-uk`, якщо пакет встановлений, інакше з `data/dicts/uk_UA.dic` (MPL-2.0, LibreOffice dictionaries).
+Потрібні пакети: `build-essential`, `cmake`, `pkg-config`, `libx11-dev`, `libxtst-dev`, `libxkbcommon-dev`, `libglib2.0-dev`, `hunspell-en-us`. Для морфології потрібен також `libhunspell-dev`; без нього демон перевіряє точні основи з `.dic`. Український словник демон бере з `hunspell-uk`, якщо пакет встановлений, інакше з `data/dicts/uk_UA.dic` (MPL-2.0, LibreOffice dictionaries). Файл `.aff` автоматично підхоплюється поруч із вибраним `.dic`.
 
 ```bash
 cmake -S . -B build
@@ -34,7 +34,7 @@ ctest --test-dir build --output-on-failure
 
 Термінали `gnome-terminal`, `terminator`, `xterm`, а також `cinnamon-screensaver` і `gcr-prompter`, у списку винятків. Свій список лежить у `~/.config/layout-fix/layout-fix.conf`. Зразок є в `config/layout-fix.conf`. Ім'я вікна береться з `WM_CLASS` (`xprop`). Діалог пароля polkit малюється всередині Cinnamon і в цей список не потрапляє: перед ним увімкніть паузу.
 
-Слово коротше за 3 літери не чіпається. Якщо набране вже є в словнику поточної мови, розкладка теж не змінюється.
+Слово коротше за 3 літери не чіпається. Якщо набране вже є в словнику поточної мови, розкладка теж не змінюється. З `libhunspell-dev` враховуються словоформи за `.aff`; без нього працює точний збіг основи.
 
 ## Автозапуск
 

@@ -88,8 +88,11 @@ int App::run(const Config &config, bool check_only) {
     return 1;
   }
   log::info("словники: en " + std::to_string(english_dict.size()) + " (" +
-            en_path + "), uk " + std::to_string(ukrainian_dict.size()) + " (" +
-            uk_path + ")");
+            en_path + (english_dict.has_morphology() ? ", Hunspell), uk "
+                                                       : ", точні основи), uk ") +
+            std::to_string(ukrainian_dict.size()) + " (" +
+            uk_path + (ukrainian_dict.has_morphology() ? ", Hunspell)"
+                                                        : ", точні основи)"));
   if (!focus.wm_class().empty() || !focus.wm_name().empty()) {
     log::info("активне вікно: " + focus.wm_class() + " / " + focus.wm_name());
   }

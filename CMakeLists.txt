@@ -9,6 +9,7 @@ find_package(X11 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
+pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
 
 add_executable(layout-fix
   src/main.cpp
@@ -44,6 +45,16 @@ add_executable(layout-fix-test
   src/detect/detector.cpp)
 target_include_directories(layout-fix-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(layout-fix-test PRIVATE -Wall -Wextra -Wpedantic)
+
+if(HUNSPELL_FOUND)
+  foreach(target layout-fix layout-fix-test)
+    target_compile_definitions(${target} PRIVATE LAYOUT_FIX_HAVE_HUNSPELL=1)
+    target_link_libraries(${target} PRIVATE PkgConfig::HUNSPELL)
+  endforeach()
+  message(STATUS "Hunspell morphology enabled")
+else()
+  message(STATUS "Hunspell development files not found; using exact dictionary entries")
+endif()
 
 enable_testing()
 add_test(NAME core COMMAND layout-fix-test)
