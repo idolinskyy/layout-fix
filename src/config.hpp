@@ -6,6 +6,7 @@
 namespace layoutfix {
 
 struct Config {
+  std::string config_path;
   int min_length = 3;
   std::string dict_en;
   std::string dict_uk;

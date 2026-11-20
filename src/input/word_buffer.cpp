@@ -4,20 +4,26 @@ namespace layoutfix {
 
 void WordBuffer::clear() {
     strokes_.clear();
-    current_.clear();
-    other_.clear();
+    for (auto& text : texts_) {
+        text.clear();
+    }
+    current_language_ = Lang::Other;
     group_ = -1;
 }
 
-void WordBuffer::push_word(unsigned keycode, bool shift, std::string current,
-                           std::string other) {
-    current_ += current;
-    other_ += other;
-    strokes_.push_back(Stroke{keycode, shift, true, std::move(current), std::move(other)});
+void WordBuffer::push_word(unsigned keycode, bool shift, Lang current_language,
+                           std::array<std::string, 3> forms) {
+    current_language_ = current_language;
+    for (std::size_t i = 0; i < forms.size(); ++i) {
+        texts_[i] += forms[i];
+    }
+    strokes_.push_back(Stroke{keycode, shift, true,
+                              forms[lang_index(current_language)], {},
+                              std::move(forms)});
 }
 
 void WordBuffer::push_boundary(unsigned keycode, bool shift, std::string text) {
-    strokes_.push_back(Stroke{keycode, shift, false, std::move(text), {}});
+    strokes_.push_back(Stroke{keycode, shift, false, std::move(text), {}, {}});
 }
 
 void WordBuffer::pop() {
@@ -25,14 +31,14 @@ void WordBuffer::pop() {
         return;
     }
     const auto& last = strokes_.back();
-    if (current_.size() >= last.current.size()) {
-        current_.resize(current_.size() - last.current.size());
-    }
-    if (other_.size() >= last.other.size()) {
-        other_.resize(other_.size() - last.other.size());
+    for (std::size_t i = 0; i < last.forms.size(); ++i) {
+        if (texts_[i].size() >= last.forms[i].size()) {
+            texts_[i].resize(texts_[i].size() - last.forms[i].size());
+        }
     }
     strokes_.pop_back();
     if (strokes_.empty()) {
+        current_language_ = Lang::Other;
         group_ = -1;
     }
 }

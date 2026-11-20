@@ -3,7 +3,7 @@
 Type=Application
 Name=Layout Fix
 Comment=Виправляє слово, набране не в тій розкладці
-Exec=/usr/local/bin/layout-fix
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/layout-fix
 Terminal=false
 Categories=Utility;
 X-GNOME-Autostart-enabled=false

@@ -5,9 +5,11 @@
 #include "input/word_buffer.hpp"
 #include "utf8.hpp"
 
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -33,8 +35,10 @@ int main() {
 
   layoutfix::Dictionary english;
   layoutfix::Dictionary ukrainian;
+  layoutfix::Dictionary russian;
   CHECK(english.load_text("3\nhello/SM\nyes\nab\n"));
       CHECK(ukrainian.load_text("4\nпривіт/1$\nщо\nну\nі\n"));
+  CHECK(russian.load_text("4\nпривет\nну\nи\nчто\n"));
   CHECK(english.contains("Hello"));
   CHECK(ukrainian.contains("Привіт"));
   CHECK(!english.contains("ghbdsn"));
@@ -53,24 +57,43 @@ int main() {
   CHECK(!ukrainian.contains("qzxjv"));
   CHECK(layoutfix::decide("qzxjv", "qzxjv", english, ukrainian, 3) ==
         Decision::Keep);
-      CHECK(layoutfix::decide_context({"qx", "zz"}, {"ну", "і"}, english,
-                                                                                                      ukrainian, 3) == Decision::Switch);
-      CHECK(layoutfix::decide_context({"ab", "yes"}, {"ну", "і"}, english,
-                                                                                                      ukrainian, 3) == Decision::Keep);
-      CHECK(layoutfix::decide_context({"qx", "zz"}, {"ну", "qzxjv"}, english,
-                                                                                                      ukrainian, 3) == Decision::Keep);
-      CHECK(layoutfix::decide_context({"qx"}, {"ну"}, english, ukrainian, 3) ==
-                        Decision::Keep);
+  CHECK(layoutfix::decide_context({"qx", "zz"}, {"ну", "і"}, english,
+                                  ukrainian, 3) == Decision::Switch);
+  CHECK(layoutfix::decide_context({"ab", "yes"}, {"ну", "і"}, english,
+                                  ukrainian, 3) == Decision::Keep);
+  CHECK(layoutfix::decide_context({"qx", "zz"}, {"ну", "qzxjv"}, english,
+                                  ukrainian, 3) == Decision::Keep);
+  CHECK(layoutfix::decide_context({"qx"}, {"ну"}, english, ukrainian, 3) ==
+        Decision::Keep);
+
+  const std::array<const layoutfix::Dictionary *, 3> dictionaries{
+      &english, &ukrainian, &russian};
+  const std::array<std::vector<std::string>, 3> unique_forms{{
+      {"qx", "zz"}, {"ну", "і"}, {"qzxjv", "qzxjv"}}};
+  CHECK(layoutfix::unique_language_candidate(unique_forms, layoutfix::Lang::En,
+                                              dictionaries, 3) ==
+        layoutfix::Lang::Uk);
+  const std::array<std::vector<std::string>, 3> ambiguous_forms{{
+      {"qx", "zz"}, {"ну", "і"}, {"ну", "и"}}};
+  CHECK(!layoutfix::unique_language_candidate(ambiguous_forms,
+                                               layoutfix::Lang::En,
+                                               dictionaries, 3));
+  const std::array<std::vector<std::string>, 3> missing_forms{{
+      {"qzxjv", "qzxjv"}, {"qzxjv", "qzxjv"}, {"qzxjv", "qzxjv"}}};
+  CHECK(!layoutfix::unique_language_candidate(missing_forms,
+                                               layoutfix::Lang::En,
+                                               dictionaries, 3));
 
   layoutfix::WordBuffer buffer;
   buffer.set_group(0);
-  buffer.push_word(42, false, "g", "п");
-  buffer.push_word(43, true, "H", "Р");
-  CHECK(buffer.current_text() == "gH");
-  CHECK(buffer.other_text() == "пР");
+  buffer.push_word(42, false, layoutfix::Lang::En, {"g", "п", "г"});
+  buffer.push_word(43, true, layoutfix::Lang::En, {"H", "Р", "Г"});
+  CHECK(buffer.text(layoutfix::Lang::En) == "gH");
+  CHECK(buffer.text(layoutfix::Lang::Uk) == "пР");
+  CHECK(buffer.text(layoutfix::Lang::Ru) == "гГ");
   buffer.pop();
-  CHECK(buffer.current_text() == "g");
-  CHECK(buffer.other_text() == "п");
+  CHECK(buffer.text(layoutfix::Lang::En) == "g");
+  CHECK(buffer.text(layoutfix::Lang::Uk) == "п");
   buffer.push_boundary(65, false, " ");
   CHECK(buffer.strokes().size() == 2);
   CHECK(!buffer.strokes().back().word);
@@ -100,6 +123,8 @@ int main() {
   CHECK(layoutfix::choose_undo_restore(false, Lang::En, Lang::En, Lang::Uk) ==
         UndoRestore::Original);
   CHECK(layoutfix::choose_undo_restore(false, Lang::Uk, Lang::En, Lang::Uk) ==
+        UndoRestore::Shown);
+  CHECK(layoutfix::choose_undo_restore(false, Lang::Ru, Lang::Uk, Lang::Ru) ==
         UndoRestore::Shown);
   CHECK(layoutfix::choose_undo_restore(false, Lang::Other, Lang::En,
                                        Lang::Uk) == UndoRestore::Drop);
@@ -145,6 +170,22 @@ int main() {
     std::cerr << "FAIL немає uk_UA.dic для перевірки справжнього словника\n";
     ++failures;
   }
+
+      if (std::filesystem::is_regular_file("/usr/share/hunspell/ru_RU.dic")) {
+            layoutfix::Dictionary real_russian;
+            CHECK(real_russian.load_file("/usr/share/hunspell/ru_RU.dic"));
+            CHECK(real_russian.has_morphology());
+            CHECK(real_russian.contains("привет"));
+            CHECK(!real_russian.contains("ghbdtn"));
+            const std::array<const layoutfix::Dictionary*, 3> real_dictionaries{
+                        &english, &ukrainian, &real_russian};
+            const std::array<std::vector<std::string>, 3> russian_forms{{
+                        {"ghbdtn"}, {"qzxjv"}, {"привет"}}};
+            CHECK(layoutfix::unique_language_candidate(russian_forms,
+                                                                                                                                                layoutfix::Lang::En,
+                                                                                                                                                real_dictionaries, 3) ==
+                              layoutfix::Lang::Ru);
+      }
 
   if (failures != 0) {
     std::cerr << failures << " перевірок не пройшло\n";

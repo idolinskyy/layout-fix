@@ -12,7 +12,8 @@ inline UndoRestore choose_undo_restore(bool confirmed, Lang now, Lang source, La
     if (confirmed || now == source) {
         return UndoRestore::Original;
     }
-    if (now == shown && (shown == Lang::En || shown == Lang::Uk)) {
+    if (now == shown &&
+        (shown == Lang::En || shown == Lang::Uk || shown == Lang::Ru)) {
         return UndoRestore::Shown;
     }
     return UndoRestore::Drop;

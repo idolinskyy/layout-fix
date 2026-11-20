@@ -77,11 +77,40 @@ std::string default_config_path() {
                                     ? std::filesystem::path(xdg)
                                     : std::filesystem::path(std::getenv("HOME") ? std::getenv("HOME") : "") /
                                           ".config";
-    return (dir / "layout-fix" / "layout-fix.conf").string();
+    const auto user_config = dir / "layout-fix" / "layout-fix.conf";
+    if (std::filesystem::is_regular_file(user_config)) {
+        return user_config.string();
+    }
+
+    const char* system_dirs = std::getenv("XDG_CONFIG_DIRS");
+    std::string_view search_dirs =
+        system_dirs != nullptr && system_dirs[0] != '\0' ? system_dirs
+                                                         : "/etc/xdg";
+    std::size_t start = 0;
+    while (start <= search_dirs.size()) {
+        const auto separator = search_dirs.find(':', start);
+        const auto item = search_dirs.substr(
+            start, separator == std::string_view::npos
+                       ? std::string_view::npos
+                       : separator - start);
+        if (!item.empty()) {
+            const auto system_config =
+                std::filesystem::path(item) / "layout-fix" / "layout-fix.conf";
+            if (std::filesystem::is_regular_file(system_config)) {
+                return system_config.string();
+            }
+        }
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        start = separator + 1;
+    }
+    return user_config.string();
 }
 
 Config load_config(const std::string& path, bool debug_keys) {
     Config cfg;
+    cfg.config_path = path;
     cfg.debug_keys = debug_keys;
     if (path.empty() || !std::filesystem::exists(path)) {
         if (!path.empty()) {

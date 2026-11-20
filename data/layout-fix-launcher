@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+prefix="$(dirname -- "$bin_dir")"
+qt_prefix="${QT_PREFIX:-${HOME:-}/Qt/6.12.0/gcc_64}"
+
+if [ -f "$qt_prefix/lib/libQt6Widgets.so.6" ]; then
+  LD_LIBRARY_PATH="$qt_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  QT_PLUGIN_PATH="$qt_prefix/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+  QT_QPA_PLATFORM_PLUGIN_PATH="$qt_prefix/plugins/platforms"
+  export LD_LIBRARY_PATH QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH
+fi
+
+exec "$prefix/libexec/layout-fix" "$@"

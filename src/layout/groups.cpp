@@ -86,6 +86,8 @@ const char *lang_name(Lang lang) {
     return "en";
   case Lang::Uk:
     return "uk";
+  case Lang::Ru:
+    return "ru";
   case Lang::Other:
     return "інша";
   }
@@ -127,6 +129,8 @@ bool Groups::init(bool report) {
       impl_->langs[static_cast<std::size_t>(group)] = Lang::En;
     } else if (text == "і") {
       impl_->langs[static_cast<std::size_t>(group)] = Lang::Uk;
+    } else if (text == "ы") {
+      impl_->langs[static_cast<std::size_t>(group)] = Lang::Ru;
     } else {
       impl_->langs[static_cast<std::size_t>(group)] = Lang::Other;
     }

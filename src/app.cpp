@@ -1,3 +1,19 @@
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+#include <QApplication>
+#include <QAction>
+#include <QColor>
+#include <QCoreApplication>
+#include <QDesktopServices>
+#include <QEventLoop>
+#include <QFont>
+#include <QIcon>
+#include <QMenu>
+#include <QPainter>
+#include <QPixmap>
+#include <QSystemTrayIcon>
+#include <QUrl>
+#endif
+
 #include "app.hpp"
 
 #include "detect/detector.hpp"
@@ -19,8 +35,11 @@
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 
+#include <array>
 #include <chrono>
 #include <csignal>
+#include <filesystem>
+#include <fstream>
 #include <poll.h>
 #include <string>
 #include <vector>
@@ -42,10 +61,39 @@ struct Undo {
 };
 
 struct PendingWord {
-  std::string current;
-  std::string other;
+  std::array<std::string, 3> forms;
   std::vector<Stroke> strokes;
 };
+
+const char *cinnamon_source_id(Lang language) {
+  switch (language) {
+  case Lang::En:
+    return "us";
+  case Lang::Uk:
+    return "ua";
+  case Lang::Ru:
+    return "ru";
+  case Lang::Other:
+    return "";
+  }
+  return "";
+}
+
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+QIcon pause_icon(bool paused) {
+  QPixmap pixmap(32, 32);
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(paused ? QColor("#d28b26") : QColor("#378b57"));
+  painter.drawEllipse(2, 2, 28, 28);
+  painter.setPen(Qt::white);
+  painter.setFont(QFont("Sans", paused ? 16 : 17, QFont::DemiBold));
+  painter.drawText(pixmap.rect(), Qt::AlignCenter, paused ? "||" : "L");
+  return QIcon(pixmap);
+}
+#endif
 
 unsigned keycode_of(XConnection &x11, KeySym sym) {
   return XKeysymToKeycode(x11.ctrl(), sym);
@@ -73,7 +121,9 @@ int App::run(const Config &config, bool check_only) {
   focus.install();
   auto source_map_matches = [&] {
     return groups.group_for(Lang::En) == cinnamon.index_of("us") &&
-           groups.group_for(Lang::Uk) == cinnamon.index_of("ua");
+           groups.group_for(Lang::Uk) == cinnamon.index_of("ua") &&
+           (cinnamon.index_of("ru") < 0 ||
+            groups.group_for(Lang::Ru) == cinnamon.index_of("ru"));
   };
   bool maps_ready = source_map_matches();
   if (!maps_ready) {
@@ -91,8 +141,10 @@ int App::run(const Config &config, bool check_only) {
               {"/usr/share/hunspell/uk_UA.dic",
                LAYOUT_FIX_DATA_DIR "/uk_UA.dic", "data/dicts/uk_UA.dic",
                "../data/dicts/uk_UA.dic", "../../data/dicts/uk_UA.dic"});
+  const auto ru_path = resolve("", {"/usr/share/hunspell/ru_RU.dic"});
   Dictionary english_dict;
   Dictionary ukrainian_dict;
+  Dictionary russian_dict;
   if (en_path.empty() || !english_dict.load_file(en_path)) {
     log::error("немає англійського словника. Встановіть hunspell-en-us");
     return 1;
@@ -102,14 +154,25 @@ int App::run(const Config &config, bool check_only) {
                "залиште data/dicts/uk_UA.dic");
     return 1;
   }
+  const bool russian_dict_ready =
+      !ru_path.empty() && russian_dict.load_file(ru_path);
+  if (cinnamon.index_of("ru") >= 0 && !russian_dict_ready) {
+    log::error("увімкнено ru у Cinnamon, але немає ru_RU.dic/.aff");
+    return 1;
+  }
+  const std::array<const Dictionary *, 3> dictionaries{
+      &english_dict, &ukrainian_dict,
+      russian_dict_ready ? &russian_dict : nullptr};
   log::info("словники: en " + std::to_string(english_dict.size()) + " (" +
             en_path + (english_dict.has_morphology() ? ", Hunspell), uk "
                                                        : ", точні основи), uk ") +
             std::to_string(ukrainian_dict.size()) + " (" +
             uk_path + (ukrainian_dict.has_morphology() ? ", Hunspell)"
                                                         : ", точні основи)"));
-  if (!focus.wm_class().empty() || !focus.wm_name().empty()) {
-    log::info("активне вікно: " + focus.wm_class() + " / " + focus.wm_name());
+  if (russian_dict_ready) {
+    log::info("словник: ru " + std::to_string(russian_dict.size()) + " (" +
+              ru_path + ", " +
+              (russian_dict.has_morphology() ? "Hunspell)" : "точні основи)"));
   }
   if (check_only) {
     if (!maps_ready) {
@@ -193,11 +256,135 @@ int App::run(const Config &config, bool check_only) {
   auto map_retry_at = std::chrono::steady_clock::now() +
                       std::chrono::milliseconds(250);
 
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+  int qt_argc = 1;
+  char qt_name[] = "layout-fix";
+  char *qt_argv[] = {qt_name, nullptr};
+  QApplication qt_app(qt_argc, qt_argv);
+  qt_app.setQuitOnLastWindowClosed(false);
+  QSystemTrayIcon tray;
+  QMenu tray_menu;
+  QAction *status_action = tray_menu.addAction("Стан: запускаю…");
+  status_action->setEnabled(false);
+  tray_menu.addSeparator();
+  QAction *pause_action = tray_menu.addAction("Пауза");
+  QMenu *language_menu = tray_menu.addMenu("Перемкнути розкладку");
+  std::vector<std::pair<Lang, QAction *>> language_actions;
+  QAction *config_action = tray_menu.addAction("Відкрити конфіг");
+  tray_menu.addSeparator();
+  QAction *quit_action = tray_menu.addAction("Вийти");
+  tray.setContextMenu(&tray_menu);
+
+  auto language_label = [](Lang language) {
+    switch (language) {
+    case Lang::En:
+      return QStringLiteral("English (US)");
+    case Lang::Uk:
+      return QStringLiteral("Українська");
+    case Lang::Ru:
+      return QStringLiteral("Русский");
+    case Lang::Other:
+      return QStringLiteral("невідома");
+    }
+    return QStringLiteral("невідома");
+  };
+  auto rebuild_language_menu = [&] {
+    language_menu->clear();
+    language_actions.clear();
+    for (const auto &source : cinnamon.sources()) {
+      Lang language = Lang::Other;
+      if (source.id == "us") {
+        language = Lang::En;
+      } else if (source.id == "ua") {
+        language = Lang::Uk;
+      } else if (source.id == "ru") {
+        language = Lang::Ru;
+      }
+      if (language == Lang::Other || groups.group_for(language) < 0) {
+        continue;
+      }
+      QAction *action = language_menu->addAction(language_label(language));
+      action->setCheckable(true);
+      language_actions.emplace_back(language, action);
+      QObject::connect(action, &QAction::triggered,
+                       [&, index = source.index] {
+                         clear_input();
+                         undo.valid = false;
+                         cinnamon.activate(index);
+                       });
+    }
+  };
+  auto update_tray = [&] {
+    const Lang active_language = groups.language_of(groups.current_group());
+    status_action->setText(
+        QStringLiteral("Стан: %1 · мова: %2")
+            .arg(paused ? QStringLiteral("пауза")
+                        : QStringLiteral("працює"),
+                 language_label(active_language)));
+    pause_action->setText(paused ? "Відновити" : "Пауза");
+    for (const auto &[language, action] : language_actions) {
+      action->setChecked(language == active_language);
+    }
+    tray.setIcon(pause_icon(paused));
+    tray.setToolTip(QStringLiteral("layout-fix · %1 · %2")
+                        .arg(paused ? QStringLiteral("пауза")
+                                    : QStringLiteral("працює"),
+                             language_label(active_language)));
+    if (!tray.isVisible() && QSystemTrayIcon::isSystemTrayAvailable()) {
+      tray.show();
+    }
+  };
+  rebuild_language_menu();
+  update_tray();
+  if (!QSystemTrayIcon::isSystemTrayAvailable()) {
+    log::error("системний трей недоступний; керування лишається на клавіатурі");
+  }
+  QObject::connect(pause_action, &QAction::triggered, [&] {
+    paused = !paused;
+    clear_input();
+    undo.valid = false;
+    log::info(paused ? "пауза" : "знову слухаю");
+    update_tray();
+  });
+  QObject::connect(config_action, &QAction::triggered, [&] {
+    const std::filesystem::path path(config.config_path);
+    std::error_code error;
+    if (!path.parent_path().empty()) {
+      std::filesystem::create_directories(path.parent_path(), error);
+    }
+    if (!std::filesystem::exists(path)) {
+      std::ofstream file(path);
+      if (file) {
+        file << "min-length=3\n"
+                "exclude=gnome-terminal,terminator,xterm,cinnamon-screensaver,"
+                "org.cinnamon.ScreenSaver,gcr-prompter\n"
+                "pause-key=Pause\n"
+                "undo-key=Shift+Pause\n";
+      }
+    }
+    if (!QDesktopServices::openUrl(
+            QUrl::fromLocalFile(QString::fromStdString(path.string())))) {
+      log::error("не вдалося відкрити конфіг у редакторі");
+    } else {
+      log::info("зміни конфігу набудуть чинності після перезапуску");
+    }
+  });
+  QObject::connect(quit_action, &QAction::triggered,
+                   [] { g_stop = 1; });
+#endif
+
   log::info("слухаю клавіатуру. Пауза: " + config.pause_key +
             ", скасувати: " + config.undo_key + ". Таймаут перемикання: " +
             std::to_string(kLayoutSwitchTimeoutMs) + " мс");
 
   while (g_stop == 0) {
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+    qt_app.processEvents(QEventLoop::AllEvents, 0);
+    if (g_stop != 0) {
+      break;
+    }
+    update_tray();
+#endif
     if (injecting && std::chrono::steady_clock::now() > inject_deadline) {
       log::error("не дочекався відлуння власних клавіш за " +
                  std::to_string(kEchoTimeoutMs) + " мс, продовжую слухати");
@@ -221,6 +408,9 @@ int App::run(const Config &config, bool check_only) {
       undo.valid = false;
       maps_ready = false;
       refresh_groups_pending = cinnamon.refresh();
+    #ifdef LAYOUT_FIX_HAVE_QT_TRAY
+      rebuild_language_menu();
+    #endif
       map_retry_at = std::chrono::steady_clock::now() +
                      std::chrono::milliseconds(250);
       log::error("Cinnamon змінив джерела; виправлення призупинено до оновлення XKB");
@@ -314,6 +504,9 @@ int App::run(const Config &config, bool check_only) {
           paused = !paused;
           clear_input();
           undo.valid = false;
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+          update_tray();
+#endif
           log::info(paused ? "пауза" : "знову слухаю");
         }
         continue;
@@ -346,20 +539,27 @@ int App::run(const Config &config, bool check_only) {
 
       const int group = groups.current_group();
       const Lang lang = groups.language_of(group);
-      if (lang != Lang::En && lang != Lang::Uk) {
+      if (lang != Lang::En && lang != Lang::Uk &&
+          (lang != Lang::Ru || !russian_dict_ready ||
+           cinnamon.index_of("ru") < 0)) {
         clear_input();
         continue;
       }
       if (buffer.group() >= 0 && buffer.group() != group) {
         clear_input();
       }
-      const int other_group =
-          groups.group_for(lang == Lang::En ? Lang::Uk : Lang::En);
       const auto current = groups.translate(event.keycode, group, shift, caps);
-      const auto other =
-          groups.translate(event.keycode, other_group, shift, caps);
+      std::array<std::string, 3> forms;
+      for (const Lang candidate : kSupportedLanguages) {
+        const int candidate_group = groups.group_for(candidate);
+        if (candidate_group >= 0) {
+          forms[lang_index(candidate)] =
+              groups.translate(event.keycode, candidate_group, shift, caps).text;
+        }
+      }
       if (config.debug_keys && !current.text.empty()) {
-        log::keys(current.text + " | " + other.text);
+        log::keys(current.text + " | " + forms[0] + " | " + forms[1] +
+                  " | " + forms[2]);
       }
       if (current.kind == Translated::Kind::Ignore) {
         continue;
@@ -369,85 +569,41 @@ int App::run(const Config &config, bool check_only) {
         if (buffer.group() < 0) {
           buffer.set_group(group);
         }
-        buffer.push_word(event.keycode, shift, current.text, other.text);
+        buffer.push_word(event.keycode, shift, lang, std::move(forms));
         continue;
       }
 
       buffer.push_boundary(event.keycode, shift, current.text);
-      const auto word = buffer.current_text();
-      const auto alternate = buffer.other_text();
-      const bool english = lang == Lang::En;
-      const auto &current_dict = english ? english_dict : ukrainian_dict;
-      const auto &other_dict = english ? ukrainian_dict : english_dict;
-      const auto decision =
-          decide(word, alternate, english ? english_dict : ukrainian_dict,
-                 english ? ukrainian_dict : english_dict, config.min_length);
       const bool whitespace_boundary = current.text == " " || current.text == "\t" ||
                                        current.text == "\r" || current.text == "\n";
-      if (!pending_short.empty() && whitespace_boundary) {
-        std::vector<std::string> current_words;
-        std::vector<std::string> other_words;
+      std::array<std::vector<std::string>, 3> words_by_language;
+      for (const auto& pending : pending_short) {
+        for (std::size_t i = 0; i < pending.forms.size(); ++i) {
+          words_by_language[i].push_back(pending.forms[i]);
+        }
+      }
+      for (const Lang candidate : kSupportedLanguages) {
+        words_by_language[lang_index(candidate)].push_back(
+            buffer.text(candidate));
+      }
+      auto active_dictionaries = dictionaries;
+      if (cinnamon.index_of("ru") < 0) {
+        active_dictionaries[lang_index(Lang::Ru)] = nullptr;
+      }
+      const auto target = unique_language_candidate(
+          words_by_language, lang, active_dictionaries, config.min_length);
+      if (target.has_value() && buffer.has_word()) {
         std::vector<Stroke> original;
         for (const auto& pending : pending_short) {
-          current_words.push_back(pending.current);
-          other_words.push_back(pending.other);
           original.insert(original.end(), pending.strokes.begin(),
                           pending.strokes.end());
         }
-        current_words.push_back(word);
-        other_words.push_back(alternate);
-        const auto context = decide_context(current_words, other_words,
-                                            current_dict, other_dict,
-                                            config.min_length);
-        if (context == Decision::Switch) {
-          const Lang target = english ? Lang::Uk : Lang::En;
-          const int target_index =
-              cinnamon.index_of(target == Lang::Uk ? "ua" : "us");
-          const int target_group = groups.group_for(target);
-          const auto& current_strokes = buffer.strokes();
-          original.insert(original.end(), current_strokes.begin(),
-                          current_strokes.end());
-          std::vector<Stroke> output;
-          output.reserve(original.size());
-          for (const auto& stroke : original) {
-            if (stroke.word) {
-              output.push_back(stroke);
-              continue;
-            }
-            Stroke boundary = stroke;
-            if (const auto hit = groups.find_key(target_group, stroke.current)) {
-              boundary.keycode = hit->keycode;
-              boundary.shift = hit->shift;
-            }
-            output.push_back(std::move(boundary));
-          }
-          const int from_index = cinnamon.index_of(english ? "us" : "ua");
-          std::vector<EchoKey> echoes;
-          retype.replace(static_cast<int>(original.size()), {}, echoes);
-          if (cinnamon.activate(target_index) &&
-              groups.wait_until(target, kLayoutSwitchTimeoutMs)) {
-            retype.replace(0, output, echoes);
-            undo = Undo{true, std::move(original), std::move(output), from_index,
-                        lang, target};
-            log::info("виправлено сусідні слова, розкладку перемкнено");
-          } else {
-            retype.replace(0, original, echoes);
-            log::error("не вдалося перемкнути розкладку за " +
-                       std::to_string(kLayoutSwitchTimeoutMs) +
-                       " мс, слова повернуто");
-          }
-          x11.flush_ctrl();
-          begin_inject(std::move(echoes));
-          clear_input();
-          continue;
-        }
-      }
-      if (decision == Decision::Switch && buffer.has_word()) {
-        const Lang target = english ? Lang::Uk : Lang::En;
+        const auto& current_strokes = buffer.strokes();
+        original.insert(original.end(), current_strokes.begin(),
+                        current_strokes.end());
         const int target_index =
-            cinnamon.index_of(target == Lang::Uk ? "ua" : "us");
-        const int target_group = groups.group_for(target);
-        std::vector<Stroke> original = buffer.strokes();
+            cinnamon.index_of(cinnamon_source_id(*target));
+        const int target_group = groups.group_for(*target);
         std::vector<Stroke> output;
         output.reserve(original.size());
         for (const auto &stroke : original) {
@@ -462,16 +618,17 @@ int App::run(const Config &config, bool check_only) {
           }
           output.push_back(std::move(boundary));
         }
-        const int from_index = cinnamon.index_of(english ? "us" : "ua");
+        const int from_index = cinnamon.index_of(cinnamon_source_id(lang));
         std::vector<EchoKey> echoes;
         retype.replace(static_cast<int>(original.size()), {}, echoes);
         if (cinnamon.activate(target_index) &&
-            groups.wait_until(target, kLayoutSwitchTimeoutMs)) {
+            groups.wait_until(*target, kLayoutSwitchTimeoutMs)) {
           retype.replace(0, output, echoes);
           undo = Undo{
               true,  std::move(original), std::move(output), from_index, lang,
-              target};
-          log::info("виправлено слово, розкладку перемкнено");
+              *target};
+          log::info("виправлено слово або контекст; мова " +
+                    std::string(lang_name(*target)));
         } else {
           retype.replace(0, original, echoes);
           log::error("не вдалося перемкнути розкладку за " +
@@ -480,13 +637,21 @@ int App::run(const Config &config, bool check_only) {
         }
         x11.flush_ctrl();
         begin_inject(std::move(echoes));
+        clear_input();
+        continue;
       } else {
         undo.valid = false;
       }
-      if (decision != Decision::Switch && whitespace_boundary &&
-          buffer.has_word() &&
-          utf8::char_count(word) < static_cast<std::size_t>(config.min_length)) {
-        pending_short.push_back(PendingWord{word, alternate, buffer.strokes()});
+      const auto& current_word = buffer.text(lang);
+      if (whitespace_boundary && buffer.has_word() &&
+          utf8::char_count(current_word) <
+              static_cast<std::size_t>(config.min_length)) {
+        std::array<std::string, 3> pending_forms;
+        for (const Lang candidate : kSupportedLanguages) {
+          pending_forms[lang_index(candidate)] = buffer.text(candidate);
+        }
+        pending_short.push_back(
+            PendingWord{std::move(pending_forms), buffer.strokes()});
         if (pending_short.size() > 2) {
           pending_short.erase(pending_short.begin());
         }

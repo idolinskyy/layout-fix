@@ -4,11 +4,10 @@
 #include <string>
 #include <string_view>
 
+#include "lang.hpp"
 #include "x11/connection.hpp"
 
 namespace layoutfix {
-
-enum class Lang { En, Uk, Other };
 
 struct KeyHit {
     unsigned keycode = 0;
