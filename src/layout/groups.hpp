@@ -28,7 +28,7 @@ public:
     Groups(const Groups&) = delete;
     Groups& operator=(const Groups&) = delete;
 
-    bool init();
+    bool init(bool report = true);
     Lang language_of(int group) const;
     int group_for(Lang lang) const;
     int current_group() const;

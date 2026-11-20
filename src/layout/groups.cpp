@@ -11,7 +11,6 @@
 #include <chrono>
 #include <thread>
 #include <unordered_map>
-#include <vector>
 
 namespace layoutfix {
 namespace {
@@ -93,13 +92,15 @@ const char *lang_name(Lang lang) {
   return "?";
 }
 
-bool Groups::init() {
+bool Groups::init(bool report) {
   delete impl_;
   impl_ = new Impl();
   auto *dpy = x11_.ctrl();
   impl_->desc = XkbGetMap(dpy, XkbAllClientInfoMask, XkbUseCoreKbd);
   if (impl_->desc == nullptr) {
-    log::error("не вдалося прочитати розкладку XKB");
+    if (report) {
+      log::error("не вдалося прочитати розкладку XKB");
+    }
     return false;
   }
 
@@ -113,7 +114,9 @@ bool Groups::init() {
     }
   }
   if (impl_->s_keycode == 0) {
-    log::error("не знайдено клавішу S в англійській групі");
+    if (report) {
+      log::error("не знайдено клавішу S в англійській групі");
+    }
     return false;
   }
 
@@ -143,11 +146,16 @@ bool Groups::init() {
   }
 
   if (group_for(Lang::En) < 0 || group_for(Lang::Uk) < 0) {
-    log::error("потрібні обидві групи XKB: англійська і українська");
+    if (report) {
+      log::error("потрібні обидві групи XKB: англійська і українська");
+    }
     return false;
   }
-  log::info(std::string("XKB en=група ") + std::to_string(group_for(Lang::En)) +
-            ", uk=група " + std::to_string(group_for(Lang::Uk)));
+  if (report) {
+    log::info(std::string("XKB en=група ") +
+              std::to_string(group_for(Lang::En)) + ", uk=група " +
+              std::to_string(group_for(Lang::Uk)));
+  }
   return true;
 }
 

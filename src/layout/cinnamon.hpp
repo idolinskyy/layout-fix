@@ -21,6 +21,7 @@ public:
 
     bool open();
     bool refresh();
+    bool consume_sources_changed();
     int index_of(std::string_view id) const;
     bool activate(int index);
     const std::vector<InputSource>& sources() const { return sources_; }

@@ -10,9 +10,14 @@ namespace layoutfix {
 
 struct CinnamonLayout::Impl {
     GDBusConnection* bus = nullptr;
+    guint sources_subscription = 0;
+    bool sources_changed = false;
 
     ~Impl() {
         if (bus != nullptr) {
+            if (sources_subscription != 0) {
+                g_dbus_connection_signal_unsubscribe(bus, sources_subscription);
+            }
             g_object_unref(bus);
         }
     }
@@ -33,7 +38,28 @@ bool CinnamonLayout::open() {
         }
         return false;
     }
+    impl_->sources_subscription = g_dbus_connection_signal_subscribe(
+        impl_->bus, "org.Cinnamon", "org.Cinnamon", "InputSourcesChanged",
+        "/org/Cinnamon", nullptr, G_DBUS_SIGNAL_FLAGS_NONE,
+        +[](GDBusConnection*, const gchar*, const gchar*, const gchar*,
+            const gchar*, GVariant*, gpointer data) {
+            static_cast<Impl*>(data)->sources_changed = true;
+        },
+        impl_, nullptr);
+    if (impl_->sources_subscription == 0) {
+        log::error("не вдалося підписатися на зміну джерел Cinnamon");
+        return false;
+    }
     return refresh();
+}
+
+bool CinnamonLayout::consume_sources_changed() {
+    g_main_context_iteration(nullptr, FALSE);
+    if (impl_ == nullptr || !impl_->sources_changed) {
+        return false;
+    }
+    impl_->sources_changed = false;
+    return true;
 }
 
 bool CinnamonLayout::refresh() {

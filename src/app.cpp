@@ -71,6 +71,14 @@ int App::run(const Config &config, bool check_only) {
   }
   Focus focus(x11);
   focus.install();
+  auto source_map_matches = [&] {
+    return groups.group_for(Lang::En) == cinnamon.index_of("us") &&
+           groups.group_for(Lang::Uk) == cinnamon.index_of("ua");
+  };
+  bool maps_ready = source_map_matches();
+  if (!maps_ready) {
+    log::error("мапи XKB і джерел Cinnamon не збігаються; виправлення призупинено");
+  }
 
   auto resolve = [](const std::string &configured,
                     const std::vector<std::string> &fallbacks) {
@@ -104,6 +112,9 @@ int App::run(const Config &config, bool check_only) {
     log::info("активне вікно: " + focus.wm_class() + " / " + focus.wm_name());
   }
   if (check_only) {
+    if (!maps_ready) {
+      return 1;
+    }
     log::info("перевірку завершено");
     return 0;
   }
@@ -178,6 +189,10 @@ int App::run(const Config &config, bool check_only) {
     }
   };
 
+  bool refresh_groups_pending = !maps_ready;
+  auto map_retry_at = std::chrono::steady_clock::now() +
+                      std::chrono::milliseconds(250);
+
   log::info("слухаю клавіатуру. Пауза: " + config.pause_key +
             ", скасувати: " + config.undo_key + ". Таймаут перемикання: " +
             std::to_string(kLayoutSwitchTimeoutMs) + " мс");
@@ -200,6 +215,26 @@ int App::run(const Config &config, bool check_only) {
     }
     if ((pfds[1].revents & POLLIN) != 0) {
       focus.drain();
+    }
+    if (cinnamon.consume_sources_changed()) {
+      clear_input();
+      undo.valid = false;
+      maps_ready = false;
+      refresh_groups_pending = cinnamon.refresh();
+      map_retry_at = std::chrono::steady_clock::now() +
+                     std::chrono::milliseconds(250);
+      log::error("Cinnamon змінив джерела; виправлення призупинено до оновлення XKB");
+    }
+    if (refresh_groups_pending &&
+        std::chrono::steady_clock::now() >= map_retry_at) {
+      if (groups.init(false) && source_map_matches()) {
+        maps_ready = true;
+        refresh_groups_pending = false;
+        log::info("мапи XKB і Cinnamon оновлено");
+      } else {
+        map_retry_at = std::chrono::steady_clock::now() +
+                       std::chrono::milliseconds(250);
+      }
     }
     if (focus.window_id() != seen_window) {
       seen_window = focus.window_id();
@@ -281,6 +316,12 @@ int App::run(const Config &config, bool check_only) {
           undo.valid = false;
           log::info(paused ? "пауза" : "знову слухаю");
         }
+        continue;
+      }
+
+      if (!maps_ready) {
+        clear_input();
+        undo.valid = false;
         continue;
       }
 
