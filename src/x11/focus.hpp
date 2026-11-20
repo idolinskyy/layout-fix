@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+union _XEvent;
+
 namespace layoutfix {
 
 class Focus {
@@ -13,6 +15,7 @@ public:
 
     bool install();
     void drain();
+    void handle_event(const _XEvent& event);
     unsigned long window_id() const { return window_; }
     const std::string& wm_class() const { return wm_class_; }
     const std::string& wm_name() const { return wm_name_; }

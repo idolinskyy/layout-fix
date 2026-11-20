@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 
+#include "detect/selection.hpp"
 #include "lang.hpp"
 #include "x11/connection.hpp"
 
@@ -34,6 +35,7 @@ public:
     bool wait_until(Lang lang, int timeout_ms) const;
     Translated translate(unsigned keycode, int group, bool shift, bool caps) const;
     std::optional<KeyHit> find_key(int group, std::string_view text) const;
+    const LayoutMaps& layout_maps() const;
 
 private:
     struct Impl;

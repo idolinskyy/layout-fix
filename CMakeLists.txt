@@ -36,12 +36,14 @@ add_executable(layout-fix
   src/x11/connection.cpp
   src/x11/listener.cpp
   src/x11/focus.cpp
+  src/x11/clipboard.cpp
   src/x11/retype.cpp
   src/input/word_buffer.cpp
   src/layout/groups.cpp
   src/layout/cinnamon.cpp
   src/detect/dictionary.cpp
-  src/detect/detector.cpp)
+  src/detect/detector.cpp
+  src/detect/selection.cpp)
 
 configure_file(data/layout-fix.desktop.in
   ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.desktop @ONLY)
@@ -73,7 +75,8 @@ add_executable(layout-fix-test
   src/utf8.cpp
   src/input/word_buffer.cpp
   src/detect/dictionary.cpp
-  src/detect/detector.cpp)
+  src/detect/detector.cpp
+  src/detect/selection.cpp)
 target_include_directories(layout-fix-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(layout-fix-test PRIVATE -Wall -Wextra -Wpedantic)
 

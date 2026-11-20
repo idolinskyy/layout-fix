@@ -1,6 +1,7 @@
 #include "config.hpp"
 #include "detect/detector.hpp"
 #include "detect/dictionary.hpp"
+#include "detect/selection.hpp"
 #include "input/echoes.hpp"
 #include "input/undo_restore.hpp"
 #include "input/word_buffer.hpp"
@@ -39,6 +40,7 @@ int main() {
   saved_config.exclude = {"terminal-a", "terminal-b"};
   saved_config.pause_key = "F8";
   saved_config.undo_key = "Shift+F8";
+  saved_config.convert_key = "Alt+F8";
   CHECK(layoutfix::save_config_file(
         saved_config, (config_test_dir / "layout-fix.conf").string()));
   const auto loaded_config =
@@ -50,7 +52,24 @@ int main() {
   CHECK(loaded_config.exclude == saved_config.exclude);
   CHECK(loaded_config.pause_key == saved_config.pause_key);
   CHECK(loaded_config.undo_key == saved_config.undo_key);
+  CHECK(loaded_config.convert_key == saved_config.convert_key);
   std::filesystem::remove_all(config_test_dir);
+
+  const auto hk_pause = layoutfix::parse_hotkey("Pause");
+  CHECK(hk_pause.keysym == "Pause" && !hk_pause.shift && !hk_pause.ctrl &&
+        !hk_pause.alt && !hk_pause.super);
+  const auto hk_undo = layoutfix::parse_hotkey("Shift+Pause");
+  CHECK(hk_undo.keysym == "Pause" && hk_undo.shift && !hk_undo.ctrl &&
+        !hk_undo.alt && !hk_undo.super);
+  const auto hk_convert = layoutfix::parse_hotkey("Alt+Pause");
+  CHECK(hk_convert.keysym == "Pause" && !hk_convert.shift && !hk_convert.ctrl &&
+        hk_convert.alt && !hk_convert.super);
+  const auto hk_combo = layoutfix::parse_hotkey(" ctrl + Shift + F9 ");
+  CHECK(hk_combo.keysym == "F9" && hk_combo.shift && hk_combo.ctrl &&
+        !hk_combo.alt && !hk_combo.super);
+  CHECK(layoutfix::parse_hotkey("").keysym.empty());
+  CHECK(layoutfix::parse_hotkey("Unknown+Pause").keysym.empty());
+  CHECK(layoutfix::parse_hotkey("Alt+").keysym.empty());
 
   CHECK(layoutfix::utf8::casefold("Привіт") == "привіт");
   CHECK(layoutfix::utf8::casefold("HELLO") == "hello");
@@ -140,6 +159,123 @@ int main() {
   CHECK(layoutfix::consume_echo(echoes, false, false, 38) ==
         layoutfix::EchoConsume::Done);
   CHECK(echoes.empty());
+
+  // Optional pre-release skipped cleanly when press arrives directly.
+  std::vector<layoutfix::EchoKey> opt_echoes{
+      {65, false, true}, {65, true, false}, {65, false, false}};
+  CHECK(layoutfix::consume_echo(opt_echoes, false, true, 99) ==
+        layoutfix::EchoConsume::Ignored);
+  CHECK(opt_echoes.size() == 3);
+  CHECK(layoutfix::consume_echo(opt_echoes, false, true, 65) ==
+        layoutfix::EchoConsume::Matched);
+  CHECK(opt_echoes.size() == 1);
+  CHECK(layoutfix::consume_echo(opt_echoes, false, false, 65) ==
+        layoutfix::EchoConsume::Done);
+  CHECK(opt_echoes.empty());
+
+  // Optional pre-release matched normally when emitted by Xorg.
+  std::vector<layoutfix::EchoKey> opt_echoes_hit{
+      {65, false, true}, {65, true, false}, {65, false, false}};
+  CHECK(layoutfix::consume_echo(opt_echoes_hit, false, false, 65) ==
+        layoutfix::EchoConsume::Matched);
+  CHECK(opt_echoes_hit.size() == 2);
+  CHECK(layoutfix::consume_echo(opt_echoes_hit, false, true, 65) ==
+        layoutfix::EchoConsume::Matched);
+  CHECK(layoutfix::consume_echo(opt_echoes_hit, false, false, 65) ==
+        layoutfix::EchoConsume::Done);
+
+  // Selection conversion tests.
+  layoutfix::LayoutMaps maps;
+  auto add_key = [&](const char *en, const char *uk, const char *ru) {
+    using layoutfix::Lang;
+    using layoutfix::lang_index;
+    const std::array<const char *, 3> vals{en, uk, ru};
+    for (std::size_t a = 0; a < 3; ++a) {
+      for (std::size_t b = 0; b < 3; ++b) {
+        if (a != b) {
+          maps.tables[a][b].emplace(vals[a], vals[b]);
+        }
+      }
+    }
+  };
+  add_key("g", "п", "п");
+  add_key("h", "р", "р");
+  add_key("b", "и", "и");
+  add_key("d", "в", "в");
+  add_key("s", "і", "ы");
+  add_key("S", "І", "Ы");
+  add_key("n", "т", "т");
+  add_key("t", "е", "е");
+  add_key("Y", "Н", "Н");
+  add_key("y", "н", "н");
+  add_key("e", "у", "у");
+  add_key("o", "щ", "щ");
+  add_key("j", "о", "о");
+  add_key("v", "м", "м");
+  add_key("k", "л", "л");
+  add_key("l", "д", "д");
+  add_key("r", "к", "к");
+  add_key("w", "ц", "ц");
+  add_key(",", "б", "б");
+  add_key(".", "ю", "ю");
+  add_key("/", ".", ".");
+  add_key("?", ",", ",");
+
+  layoutfix::Dictionary sel_en;
+  layoutfix::Dictionary sel_uk;
+  layoutfix::Dictionary sel_ru;
+  CHECK(sel_en.load_text("3\nhello\nworld\nyes\n"));
+  CHECK(sel_uk.load_text("6\nпривіт\nну\nі\nщо\nмир\n"));
+  CHECK(sel_ru.load_text("3\nпривет\nмир\nну\n"));
+  const std::array<const layoutfix::Dictionary *, 3> sel_dicts{
+      &sel_en, &sel_uk, &sel_ru};
+  const std::array<bool, 3> all_active{true, true, true};
+  const std::array<bool, 3> en_uk_active{true, true, false};
+
+  const auto sel_uk_word = layoutfix::convert_selection(
+      "ghbdsn", maps, sel_dicts, all_active, layoutfix::Lang::En);
+  CHECK(sel_uk_word.changed && sel_uk_word.target == layoutfix::Lang::Uk &&
+        sel_uk_word.text == "привіт");
+
+  const auto sel_ru_word = layoutfix::convert_selection(
+      "ghbdtn", maps, sel_dicts, all_active, layoutfix::Lang::En);
+  CHECK(sel_ru_word.changed && sel_ru_word.target == layoutfix::Lang::Ru &&
+        sel_ru_word.text == "привет");
+
+  const auto sel_multiline = layoutfix::convert_selection(
+      "Ye s oj?\nS oj/", maps, sel_dicts, all_active, layoutfix::Lang::En);
+  CHECK(sel_multiline.changed && sel_multiline.target == layoutfix::Lang::Uk &&
+        sel_multiline.text == "Ну і що,\nІ що.");
+
+  const auto sel_to_en = layoutfix::convert_selection(
+      "руддщб цщкдвю", maps, sel_dicts, all_active, layoutfix::Lang::Uk);
+  CHECK(sel_to_en.changed && sel_to_en.target == layoutfix::Lang::En &&
+        sel_to_en.text == "hello, world.");
+
+  const auto sel_ru_to_uk = layoutfix::convert_selection(
+      "привыт", maps, sel_dicts, all_active, layoutfix::Lang::Ru);
+  CHECK(sel_ru_to_uk.changed && sel_ru_to_uk.target == layoutfix::Lang::Uk &&
+        sel_ru_to_uk.text == "привіт");
+
+  const auto sel_tie_ru = layoutfix::convert_selection(
+      "vbh", maps, sel_dicts, all_active, layoutfix::Lang::Ru);
+  CHECK(sel_tie_ru.changed && sel_tie_ru.target == layoutfix::Lang::Ru &&
+        sel_tie_ru.text == "мир");
+
+  const auto sel_tie_uk = layoutfix::convert_selection(
+      "vbh", maps, sel_dicts, all_active, layoutfix::Lang::En);
+  CHECK(sel_tie_uk.changed && sel_tie_uk.target == layoutfix::Lang::Uk &&
+        sel_tie_uk.text == "мир");
+
+  const auto sel_no_ru = layoutfix::convert_selection(
+      "ghbdtn", maps, {&sel_en, &sel_uk, nullptr}, en_uk_active,
+      layoutfix::Lang::En);
+  CHECK(sel_no_ru.changed && sel_no_ru.target == layoutfix::Lang::Uk &&
+        sel_no_ru.text == "привет");
+
+  const auto sel_unchanged = layoutfix::convert_selection(
+      "12345", maps, sel_dicts, all_active, layoutfix::Lang::En);
+  CHECK(!sel_unchanged.changed);
 
   using layoutfix::Lang;
   using layoutfix::UndoRestore;

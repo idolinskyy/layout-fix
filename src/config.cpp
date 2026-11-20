@@ -55,19 +55,58 @@ std::string expand_home(std::string path) {
     return path;
 }
 
+std::string to_lower_ascii(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char ch : text) {
+        out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    return out;
+}
+
 }  // namespace
 
 Hotkey parse_hotkey(std::string_view text) {
     Hotkey key;
-    auto body = trim(text);
-    if (body.rfind("Shift+", 0) == 0) {
-        key.shift = true;
-        body = body.substr(6);
+    key.keysym.clear();
+    const auto body = trim(text);
+    if (body.empty()) {
+        return key;
     }
-    key.keysym = trim(body);
-    if (key.keysym.empty()) {
-        key.keysym = "Pause";
+
+    std::vector<std::string> parts;
+    std::size_t start = 0;
+    while (start <= body.size()) {
+        const auto plus = body.find('+', start);
+        const auto piece = body.substr(start, plus == std::string::npos
+                                                  ? std::string::npos
+                                                  : plus - start);
+        auto item = trim(piece);
+        if (item.empty()) {
+            return key;
+        }
+        parts.push_back(std::move(item));
+        if (plus == std::string::npos) {
+            break;
+        }
+        start = plus + 1;
     }
+
+    for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
+        const auto mod = to_lower_ascii(parts[i]);
+        if (mod == "shift") {
+            key.shift = true;
+        } else if (mod == "ctrl" || mod == "control") {
+            key.ctrl = true;
+        } else if (mod == "alt" || mod == "mod1") {
+            key.alt = true;
+        } else if (mod == "super" || mod == "win" || mod == "meta") {
+            key.super = true;
+        } else {
+            return key;
+        }
+    }
+    key.keysym = parts.back();
     return key;
 }
 
@@ -155,9 +194,17 @@ Config load_config(const std::string& path, bool debug_keys) {
         } else if (key == "exclude") {
             cfg.exclude = split_csv(value);
         } else if (key == "pause-key") {
-            cfg.pause_key = std::move(value);
+            if (!value.empty()) {
+                cfg.pause_key = std::move(value);
+            }
         } else if (key == "undo-key") {
-            cfg.undo_key = std::move(value);
+            if (!value.empty()) {
+                cfg.undo_key = std::move(value);
+            }
+        } else if (key == "convert-key") {
+            if (!value.empty()) {
+                cfg.convert_key = std::move(value);
+            }
         } else if (!key.empty()) {
             log::info("невідомий параметр конфігу: " + key);
         }
@@ -198,7 +245,8 @@ bool save_config_file(const Config &config, const std::string &path) {
     }
     out << '\n'
         << "pause-key=" << config.pause_key << '\n'
-        << "undo-key=" << config.undo_key << '\n';
+        << "undo-key=" << config.undo_key << '\n'
+        << "convert-key=" << config.convert_key << '\n';
     out.flush();
     return out.good();
 }

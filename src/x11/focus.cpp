@@ -82,14 +82,18 @@ void Focus::refresh() {
   }
 }
 
+void Focus::handle_event(const XEvent &event) {
+  if (event.type == PropertyNotify && event.xproperty.atom == active_atom_) {
+    refresh();
+  }
+}
+
 void Focus::drain() {
   auto *dpy = x11_.ctrl();
   while (XPending(dpy) > 0) {
     XEvent event;
     XNextEvent(dpy, &event);
-    if (event.type == PropertyNotify && event.xproperty.atom == active_atom_) {
-      refresh();
-    }
+    handle_event(event);
   }
 }
 

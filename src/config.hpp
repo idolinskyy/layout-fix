@@ -21,12 +21,16 @@ struct Config {
                                    "layout-fix"};
   std::string pause_key = "Pause";
   std::string undo_key = "Shift+Pause";
+  std::string convert_key = "Alt+Pause";
   bool debug_keys = false;
 };
 
 struct Hotkey {
   std::string keysym = "Pause";
   bool shift = false;
+  bool ctrl = false;
+  bool alt = false;
+  bool super = false;
 };
 
 Hotkey parse_hotkey(std::string_view text);

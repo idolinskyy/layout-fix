@@ -24,6 +24,7 @@
 #include "app.hpp"
 
 #include "detect/detector.hpp"
+#include "detect/selection.hpp"
 #include "events.hpp"
 #include "input/echoes.hpp"
 #include "input/undo_restore.hpp"
@@ -33,6 +34,7 @@
 #include "log.hpp"
 #include "timing.hpp"
 #include "utf8.hpp"
+#include "x11/clipboard.hpp"
 #include "x11/connection.hpp"
 #include "x11/focus.hpp"
 #include "x11/listener.hpp"
@@ -68,6 +70,14 @@ struct Undo {
 struct PendingWord {
   std::array<std::string, 3> forms;
   std::vector<Stroke> strokes;
+};
+
+struct ClipboardRestore {
+  bool pending = false;
+  bool had_saved = false;
+  bool serve_seen = false;
+  std::string saved;
+  std::chrono::steady_clock::time_point deadline;
 };
 
 const char *cinnamon_source_id(Lang language) {
@@ -107,7 +117,41 @@ QIcon layout_icon(Lang language, bool paused) {
 #endif
 
 unsigned keycode_of(XConnection &x11, KeySym sym) {
-  return XKeysymToKeycode(x11.ctrl(), sym);
+  return sym == NoSymbol ? 0 : XKeysymToKeycode(x11.ctrl(), sym);
+}
+
+unsigned hotkey_keycode(XConnection &x11, const Hotkey &hotkey) {
+  if (hotkey.keysym.empty()) {
+    return 0;
+  }
+  return keycode_of(x11, XStringToKeysym(hotkey.keysym.c_str()));
+}
+
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+bool same_hotkey(const Hotkey &a, unsigned a_kc, const Hotkey &b,
+                 unsigned b_kc) {
+  return a_kc == b_kc && a.shift == b.shift && a.ctrl == b.ctrl &&
+         a.alt == b.alt && a.super == b.super;
+}
+#endif
+
+bool hotkey_matches(const Hotkey &hotkey, unsigned hk_kc, unsigned break_kc,
+                    unsigned event_kc, unsigned state) {
+  if (hk_kc == 0 || event_kc == 0) {
+    return false;
+  }
+  const bool key_match =
+      event_kc == hk_kc ||
+      (hotkey.keysym == "Pause" && break_kc != 0 && event_kc == break_kc);
+  if (!key_match) {
+    return false;
+  }
+  const bool shift = (state & ShiftMask) != 0;
+  const bool ctrl = (state & ControlMask) != 0;
+  const bool alt = (state & Mod1Mask) != 0;
+  const bool super = (state & Mod4Mask) != 0;
+  return hotkey.shift == shift && hotkey.ctrl == ctrl && hotkey.alt == alt &&
+         hotkey.super == super;
 }
 
 bool is_command_modifier(unsigned state) {
@@ -195,16 +239,27 @@ int App::run(Config config, bool check_only) {
 
   Retype retype(x11);
   Listener listener(x11);
-  if (!retype.init() || !listener.start()) {
+  Clipboard clipboard(x11);
+  if (!retype.init() || !listener.start() || !clipboard.init()) {
     return 1;
   }
 
+  auto drain_ctrl = [&] {
+    auto *dpy = x11.ctrl();
+    while (XPending(dpy) > 0) {
+      XEvent ev;
+      XNextEvent(dpy, &ev);
+      focus.handle_event(ev);
+      clipboard.handle_event(ev);
+    }
+  };
+
   auto pause_key = parse_hotkey(config.pause_key);
   auto undo_key = parse_hotkey(config.undo_key);
-  unsigned pause_kc =
-      keycode_of(x11, XStringToKeysym(pause_key.keysym.c_str()));
-  unsigned undo_kc =
-      keycode_of(x11, XStringToKeysym(undo_key.keysym.c_str()));
+  auto convert_key = parse_hotkey(config.convert_key);
+  unsigned pause_kc = hotkey_keycode(x11, pause_key);
+  unsigned undo_kc = hotkey_keycode(x11, undo_key);
+  unsigned convert_kc = hotkey_keycode(x11, convert_key);
   const unsigned break_kc = keycode_of(x11, XK_Break);
   std::vector<unsigned> command_keys;
   for (KeySym sym : {XK_Control_L, XK_Control_R, XK_Alt_L, XK_Alt_R, XK_Super_L,
@@ -234,6 +289,7 @@ int App::run(Config config, bool check_only) {
 
   WordBuffer buffer;
   Undo undo;
+  ClipboardRestore clip_restore;
   std::vector<PendingWord> pending_short;
   auto clear_input = [&] {
     buffer.clear();
@@ -378,6 +434,11 @@ int App::run(Config config, bool check_only) {
     undo_hotkey->setPlaceholderText(QStringLiteral("Shift+Pause"));
     form->addRow(QStringLiteral("Скасувати останнє виправлення"), undo_hotkey);
 
+    auto *convert_hotkey =
+        new QLineEdit(QString::fromStdString(config.convert_key));
+    convert_hotkey->setPlaceholderText(QStringLiteral("Alt+Pause"));
+    form->addRow(QStringLiteral("Виправити виділений текст"), convert_hotkey);
+
     auto *excluded_windows = new QPlainTextEdit;
     excluded_windows->setPlaceholderText(
         QStringLiteral("Одна частина WM_CLASS на рядок"));
@@ -411,7 +472,7 @@ int App::run(Config config, bool check_only) {
     const int result = dialog.exec();
     listener.drain();
     listener.take();
-    focus.drain();
+    drain_ctrl();
     clear_input();
     paused = was_paused;
     update_tray();
@@ -421,19 +482,23 @@ int App::run(Config config, bool check_only) {
 
     const std::string new_pause_text = pause_hotkey->text().trimmed().toStdString();
     const std::string new_undo_text = undo_hotkey->text().trimmed().toStdString();
+    const std::string new_convert_text =
+        convert_hotkey->text().trimmed().toStdString();
     const Hotkey new_pause = parse_hotkey(new_pause_text);
     const Hotkey new_undo = parse_hotkey(new_undo_text);
-    const unsigned new_pause_kc =
-        keycode_of(x11, XStringToKeysym(new_pause.keysym.c_str()));
-    const unsigned new_undo_kc =
-        keycode_of(x11, XStringToKeysym(new_undo.keysym.c_str()));
-    if (new_pause_kc == 0 || new_undo_kc == 0 ||
-        (new_pause_kc == new_undo_kc && new_pause.shift == new_undo.shift)) {
+    const Hotkey new_convert = parse_hotkey(new_convert_text);
+    const unsigned new_pause_kc = hotkey_keycode(x11, new_pause);
+    const unsigned new_undo_kc = hotkey_keycode(x11, new_undo);
+    const unsigned new_convert_kc = hotkey_keycode(x11, new_convert);
+    if (new_pause_kc == 0 || new_undo_kc == 0 || new_convert_kc == 0 ||
+        same_hotkey(new_pause, new_pause_kc, new_undo, new_undo_kc) ||
+        same_hotkey(new_pause, new_pause_kc, new_convert, new_convert_kc) ||
+        same_hotkey(new_undo, new_undo_kc, new_convert, new_convert_kc)) {
       QMessageBox::warning(nullptr, QStringLiteral("Неправильні клавіші"),
-                           QStringLiteral("Вкажи дві різні доступні клавіші."));
+                           QStringLiteral("Вкажи три різні доступні клавіші."));
       listener.drain();
       listener.take();
-      focus.drain();
+      drain_ctrl();
       return;
     }
 
@@ -441,6 +506,7 @@ int App::run(Config config, bool check_only) {
     updated.min_length = minimum_length->value();
     updated.pause_key = new_pause_text;
     updated.undo_key = new_undo_text;
+    updated.convert_key = new_convert_text;
     updated.exclude.clear();
     for (const auto &line : excluded_windows->toPlainText().split('\n')) {
       const auto name = line.trimmed();
@@ -457,15 +523,17 @@ int App::run(Config config, bool check_only) {
                             QStringLiteral("Перевір права доступу до конфігу."));
       listener.drain();
       listener.take();
-      focus.drain();
+      drain_ctrl();
       return;
     }
 
     config = std::move(updated);
     pause_key = new_pause;
     undo_key = new_undo;
+    convert_key = new_convert;
     pause_kc = new_pause_kc;
     undo_kc = new_undo_kc;
+    convert_kc = new_convert_kc;
     log::info("налаштування збережено й застосовано");
   });
   QObject::connect(about_action, &QAction::triggered, [&] {
@@ -484,7 +552,9 @@ int App::run(Config config, bool check_only) {
 #endif
 
   log::info("слухаю клавіатуру. Пауза: " + config.pause_key +
-            ", скасувати: " + config.undo_key + ". Таймаут перемикання: " +
+            ", скасувати: " + config.undo_key +
+            ", виділений текст: " + config.convert_key +
+            ". Таймаут перемикання: " +
             std::to_string(kLayoutSwitchTimeoutMs) + " мс");
 
   while (g_stop == 0) {
@@ -506,12 +576,35 @@ int App::run(Config config, bool check_only) {
         {x11.data_fd(), POLLIN, 0},
         {x11.ctrl_fd(), POLLIN, 0},
     };
-    poll(pfds, 2, 100);
+    poll(pfds, 2, clip_restore.pending ? 20 : 100);
     if ((pfds[0].revents & POLLIN) != 0) {
       listener.drain();
     }
-    if ((pfds[1].revents & POLLIN) != 0) {
-      focus.drain();
+    if ((pfds[1].revents & POLLIN) != 0 || XPending(x11.ctrl()) > 0) {
+      drain_ctrl();
+    }
+    if (clip_restore.pending) {
+      if (!clipboard.is_owning()) {
+        clip_restore.pending = false;
+      } else {
+        const auto now = std::chrono::steady_clock::now();
+        if (!clip_restore.serve_seen && clipboard.content_served()) {
+          clip_restore.serve_seen = true;
+          const auto soon =
+              now + std::chrono::milliseconds(kClipboardRestoreAfterServeMs);
+          if (soon < clip_restore.deadline) {
+            clip_restore.deadline = soon;
+          }
+        }
+        if (now >= clip_restore.deadline) {
+          if (clip_restore.had_saved) {
+            clipboard.set(std::move(clip_restore.saved));
+          } else {
+            clipboard.clear();
+          }
+          clip_restore.pending = false;
+        }
+      }
     }
     if (cinnamon.consume_sources_changed()) {
       clear_input();
@@ -570,16 +663,25 @@ int App::run(Config config, bool check_only) {
 
       const bool shift = (event.state & ShiftMask) != 0;
       const bool caps = (event.state & LockMask) != 0;
-      const bool pause_hit = event.keycode != 0 && (event.keycode == pause_kc ||
-                                                    event.keycode == break_kc ||
-                                                    event.keycode == undo_kc);
-      if (pause_hit && !is_command_modifier(event.state)) {
-        const bool want_undo =
-            undo_key.shift == shift && event.keycode == undo_kc;
-        const bool want_pause =
-            pause_key.shift == shift &&
-            (event.keycode == pause_kc || event.keycode == break_kc);
-        if (want_undo && undo.valid) {
+      const bool want_pause =
+          hotkey_matches(pause_key, pause_kc, break_kc, event.keycode,
+                         event.state);
+      const bool want_undo =
+          hotkey_matches(undo_key, undo_kc, break_kc, event.keycode,
+                         event.state);
+      const bool want_convert =
+          hotkey_matches(convert_key, convert_kc, break_kc, event.keycode,
+                         event.state);
+      if (want_pause || want_undo || want_convert) {
+        if (want_pause) {
+          paused = !paused;
+          clear_input();
+          undo.valid = false;
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+          update_tray();
+#endif
+          log::info(paused ? "пауза" : "знову слухаю");
+        } else if (want_undo && !paused && undo.valid) {
           auto original = std::move(undo.original);
           auto shown = std::move(undo.shown);
           const int index = undo.source_index;
@@ -610,14 +712,80 @@ int App::run(Config config, bool check_only) {
           }
           x11.flush_ctrl();
           begin_inject(std::move(echoes));
-        } else if (want_pause) {
-          paused = !paused;
+        } else if (want_convert && !paused && maps_ready &&
+                   !focus.excluded(config.exclude)) {
           clear_input();
           undo.valid = false;
+          std::string saved_clip;
+          bool had_saved = false;
+          if (clip_restore.pending) {
+            had_saved = clip_restore.had_saved;
+            saved_clip = std::move(clip_restore.saved);
+            clip_restore.pending = false;
+          } else {
+            had_saved = clipboard.read(kClipboardTimeoutMs, saved_clip);
+          }
+
+          auto restore_saved_now = [&] {
+            if (had_saved) {
+              clipboard.set(std::move(saved_clip));
+            } else {
+              clipboard.clear();
+            }
+          };
+
+          std::vector<EchoKey> echoes;
+          const bool sentinel_ok = clipboard.claim_sentinel();
+          retype.send_ctrl_c(echoes);
+          const bool copied =
+              sentinel_ok &&
+              clipboard.wait_for_owner_change(kClipboardTimeoutMs);
+          std::string selected;
+          if (copied && clipboard.read(kClipboardTimeoutMs, selected) &&
+              !selected.empty()) {
+            const Lang current_lang =
+                groups.language_of(groups.current_group());
+            auto active_dictionaries = dictionaries;
+            std::array<bool, 3> active_languages{
+                groups.group_for(Lang::En) >= 0 &&
+                    cinnamon.index_of("us") >= 0,
+                groups.group_for(Lang::Uk) >= 0 &&
+                    cinnamon.index_of("ua") >= 0,
+                groups.group_for(Lang::Ru) >= 0 &&
+                    cinnamon.index_of("ru") >= 0};
+            if (!active_languages[lang_index(Lang::Ru)]) {
+              active_dictionaries[lang_index(Lang::Ru)] = nullptr;
+            }
+            const auto converted = convert_selection(
+                selected, groups.layout_maps(), active_dictionaries,
+                active_languages, current_lang);
+            if (converted.changed) {
+              const int target_index =
+                  cinnamon.index_of(cinnamon_source_id(converted.target));
+              if (converted.target != current_lang && target_index >= 0) {
+                if (cinnamon.activate(target_index)) {
+                  groups.wait_until(converted.target, kLayoutSwitchTimeoutMs);
+                }
 #ifdef LAYOUT_FIX_HAVE_QT_TRAY
-          update_tray();
+                update_tray();
 #endif
-          log::info(paused ? "пауза" : "знову слухаю");
+              }
+              clipboard.set(converted.text);
+              retype.send_ctrl_v(echoes);
+              clip_restore = ClipboardRestore{
+                  true, had_saved, false, std::move(saved_clip),
+                  std::chrono::steady_clock::now() +
+                      std::chrono::milliseconds(kClipboardRestoreDelayMs)};
+              log::info("виправлено виділений текст; мова " +
+                        std::string(lang_name(converted.target)));
+            } else {
+              restore_saved_now();
+            }
+          } else {
+            restore_saved_now();
+          }
+          x11.flush_ctrl();
+          begin_inject(std::move(echoes));
         }
         continue;
       }

@@ -30,12 +30,17 @@ std::string keysym_utf8(KeySym sym) {
   return std::string(buf, buf + n - 1);
 }
 
+bool is_keypad_keysym(KeySym sym) {
+  return sym >= XK_KP_Space && sym <= XK_KP_Equal;
+}
+
 } // namespace
 
 struct Groups::Impl {
   XkbDescPtr desc = nullptr;
   std::array<Lang, kMaxGroups> langs{};
   std::array<std::unordered_map<std::string, KeyHit>, kMaxGroups> keys{};
+  LayoutMaps layout_maps{};
   int s_keycode = 0;
 
   ~Impl() {
@@ -155,6 +160,39 @@ bool Groups::init(bool report) {
     }
     return false;
   }
+
+  std::array<int, 3> lang_groups{-1, -1, -1};
+  for (const Lang lang : kSupportedLanguages) {
+    lang_groups[lang_index(lang)] = group_for(lang);
+  }
+  for (int kc = min_kc; kc <= max_kc; ++kc) {
+    for (int level = 0; level < 2; ++level) {
+      std::array<std::string, 3> chars;
+      for (std::size_t i = 0; i < 3; ++i) {
+        if (lang_groups[i] < 0) {
+          continue;
+        }
+        const KeySym sym =
+            impl_->keysym(static_cast<unsigned>(kc), lang_groups[i], level);
+        if (is_keypad_keysym(sym)) {
+          continue;
+        }
+        chars[i] = keysym_utf8(sym);
+      }
+      for (std::size_t from = 0; from < 3; ++from) {
+        if (chars[from].empty()) {
+          continue;
+        }
+        for (std::size_t to = 0; to < 3; ++to) {
+          if (from == to || chars[to].empty()) {
+            continue;
+          }
+          impl_->layout_maps.tables[from][to].emplace(chars[from], chars[to]);
+        }
+      }
+    }
+  }
+
   if (report) {
     log::info(std::string("XKB en=група ") +
               std::to_string(group_for(Lang::En)) + ", uk=група " +
@@ -263,6 +301,11 @@ std::optional<KeyHit> Groups::find_key(int group, std::string_view text) const {
     return std::nullopt;
   }
   return it->second;
+}
+
+const LayoutMaps &Groups::layout_maps() const {
+  static const LayoutMaps kEmpty;
+  return impl_ != nullptr ? impl_->layout_maps : kEmpty;
 }
 
 } // namespace layoutfix
