@@ -9,6 +9,7 @@
 #include "layout/groups.hpp"
 #include "log.hpp"
 #include "timing.hpp"
+#include "utf8.hpp"
 #include "x11/connection.hpp"
 #include "x11/focus.hpp"
 #include "x11/listener.hpp"
@@ -38,6 +39,12 @@ struct Undo {
   int source_index = -1;
   Lang source_lang = Lang::Other;
   Lang shown_lang = Lang::Other;
+};
+
+struct PendingWord {
+  std::string current;
+  std::string other;
+  std::vector<Stroke> strokes;
 };
 
 unsigned keycode_of(XConnection &x11, KeySym sym) {
@@ -142,6 +149,11 @@ int App::run(const Config &config, bool check_only) {
 
   WordBuffer buffer;
   Undo undo;
+  std::vector<PendingWord> pending_short;
+  auto clear_input = [&] {
+    buffer.clear();
+    pending_short.clear();
+  };
   bool paused = false;
   bool injecting = false;
   std::vector<EchoKey> pending_echoes;
@@ -191,7 +203,7 @@ int App::run(const Config &config, bool check_only) {
     }
     if (focus.window_id() != seen_window) {
       seen_window = focus.window_id();
-      buffer.clear();
+      clear_input();
       undo.valid = false;
     }
 
@@ -203,7 +215,7 @@ int App::run(const Config &config, bool check_only) {
             consume_echo(pending_echoes, button,
                          event.type == RawEvent::Type::Press, event.keycode);
         if (button) {
-          buffer.clear();
+          clear_input();
           undo.valid = false;
         }
         if (consumed == EchoConsume::Done) {
@@ -215,7 +227,7 @@ int App::run(const Config &config, bool check_only) {
       if (event.type == RawEvent::Type::Release ||
           event.type == RawEvent::Type::Button) {
         if (event.type == RawEvent::Type::Button) {
-          buffer.clear();
+          clear_input();
           undo.valid = false;
         }
         continue;
@@ -239,7 +251,7 @@ int App::run(const Config &config, bool check_only) {
           const Lang source_lang = undo.source_lang;
           const Lang shown_lang = undo.shown_lang;
           undo.valid = false;
-          buffer.clear();
+          clear_input();
           std::vector<EchoKey> echoes;
           const int deleted = static_cast<int>(shown.size());
           retype.replace(deleted, {}, echoes);
@@ -265,7 +277,7 @@ int App::run(const Config &config, bool check_only) {
           begin_inject(std::move(echoes));
         } else if (want_pause) {
           paused = !paused;
-          buffer.clear();
+          clear_input();
           undo.valid = false;
           log::info(paused ? "пауза" : "знову слухаю");
         }
@@ -275,17 +287,18 @@ int App::run(const Config &config, bool check_only) {
       if (paused || focus.excluded(config.exclude) ||
           is_command_modifier(event.state) ||
           key_in(event.keycode, command_keys)) {
-        buffer.clear();
+        clear_input();
         undo.valid = false;
         continue;
       }
       if (event.keycode == retype.backspace_keycode()) {
         buffer.pop();
+        pending_short.clear();
         undo.valid = false;
         continue;
       }
       if (key_in(event.keycode, nav_keys)) {
-        buffer.clear();
+        clear_input();
         undo.valid = false;
         continue;
       }
@@ -293,11 +306,11 @@ int App::run(const Config &config, bool check_only) {
       const int group = groups.current_group();
       const Lang lang = groups.language_of(group);
       if (lang != Lang::En && lang != Lang::Uk) {
-        buffer.clear();
+        clear_input();
         continue;
       }
       if (buffer.group() >= 0 && buffer.group() != group) {
-        buffer.clear();
+        clear_input();
       }
       const int other_group =
           groups.group_for(lang == Lang::En ? Lang::Uk : Lang::En);
@@ -320,12 +333,74 @@ int App::run(const Config &config, bool check_only) {
       }
 
       buffer.push_boundary(event.keycode, shift, current.text);
-      const auto &word = buffer.current_text();
-      const auto &alternate = buffer.other_text();
+      const auto word = buffer.current_text();
+      const auto alternate = buffer.other_text();
       const bool english = lang == Lang::En;
+      const auto &current_dict = english ? english_dict : ukrainian_dict;
+      const auto &other_dict = english ? ukrainian_dict : english_dict;
       const auto decision =
           decide(word, alternate, english ? english_dict : ukrainian_dict,
                  english ? ukrainian_dict : english_dict, config.min_length);
+      const bool whitespace_boundary = current.text == " " || current.text == "\t" ||
+                                       current.text == "\r" || current.text == "\n";
+      if (!pending_short.empty() && whitespace_boundary) {
+        std::vector<std::string> current_words;
+        std::vector<std::string> other_words;
+        std::vector<Stroke> original;
+        for (const auto& pending : pending_short) {
+          current_words.push_back(pending.current);
+          other_words.push_back(pending.other);
+          original.insert(original.end(), pending.strokes.begin(),
+                          pending.strokes.end());
+        }
+        current_words.push_back(word);
+        other_words.push_back(alternate);
+        const auto context = decide_context(current_words, other_words,
+                                            current_dict, other_dict,
+                                            config.min_length);
+        if (context == Decision::Switch) {
+          const Lang target = english ? Lang::Uk : Lang::En;
+          const int target_index =
+              cinnamon.index_of(target == Lang::Uk ? "ua" : "us");
+          const int target_group = groups.group_for(target);
+          const auto& current_strokes = buffer.strokes();
+          original.insert(original.end(), current_strokes.begin(),
+                          current_strokes.end());
+          std::vector<Stroke> output;
+          output.reserve(original.size());
+          for (const auto& stroke : original) {
+            if (stroke.word) {
+              output.push_back(stroke);
+              continue;
+            }
+            Stroke boundary = stroke;
+            if (const auto hit = groups.find_key(target_group, stroke.current)) {
+              boundary.keycode = hit->keycode;
+              boundary.shift = hit->shift;
+            }
+            output.push_back(std::move(boundary));
+          }
+          const int from_index = cinnamon.index_of(english ? "us" : "ua");
+          std::vector<EchoKey> echoes;
+          retype.replace(static_cast<int>(original.size()), {}, echoes);
+          if (cinnamon.activate(target_index) &&
+              groups.wait_until(target, kLayoutSwitchTimeoutMs)) {
+            retype.replace(0, output, echoes);
+            undo = Undo{true, std::move(original), std::move(output), from_index,
+                        lang, target};
+            log::info("виправлено сусідні слова, розкладку перемкнено");
+          } else {
+            retype.replace(0, original, echoes);
+            log::error("не вдалося перемкнути розкладку за " +
+                       std::to_string(kLayoutSwitchTimeoutMs) +
+                       " мс, слова повернуто");
+          }
+          x11.flush_ctrl();
+          begin_inject(std::move(echoes));
+          clear_input();
+          continue;
+        }
+      }
       if (decision == Decision::Switch && buffer.has_word()) {
         const Lang target = english ? Lang::Uk : Lang::En;
         const int target_index =
@@ -366,6 +441,16 @@ int App::run(const Config &config, bool check_only) {
         begin_inject(std::move(echoes));
       } else {
         undo.valid = false;
+      }
+      if (decision != Decision::Switch && whitespace_boundary &&
+          buffer.has_word() &&
+          utf8::char_count(word) < static_cast<std::size_t>(config.min_length)) {
+        pending_short.push_back(PendingWord{word, alternate, buffer.strokes()});
+        if (pending_short.size() > 2) {
+          pending_short.erase(pending_short.begin());
+        }
+      } else {
+        pending_short.clear();
       }
       buffer.clear();
     }

@@ -34,7 +34,7 @@ int main() {
   layoutfix::Dictionary english;
   layoutfix::Dictionary ukrainian;
   CHECK(english.load_text("3\nhello/SM\nyes\nab\n"));
-  CHECK(ukrainian.load_text("2\nпривіт/1$\nщо\n"));
+      CHECK(ukrainian.load_text("4\nпривіт/1$\nщо\nну\nі\n"));
   CHECK(english.contains("Hello"));
   CHECK(ukrainian.contains("Привіт"));
   CHECK(!english.contains("ghbdsn"));
@@ -53,6 +53,14 @@ int main() {
   CHECK(!ukrainian.contains("qzxjv"));
   CHECK(layoutfix::decide("qzxjv", "qzxjv", english, ukrainian, 3) ==
         Decision::Keep);
+      CHECK(layoutfix::decide_context({"qx", "zz"}, {"ну", "і"}, english,
+                                                                                                      ukrainian, 3) == Decision::Switch);
+      CHECK(layoutfix::decide_context({"ab", "yes"}, {"ну", "і"}, english,
+                                                                                                      ukrainian, 3) == Decision::Keep);
+      CHECK(layoutfix::decide_context({"qx", "zz"}, {"ну", "qzxjv"}, english,
+                                                                                                      ukrainian, 3) == Decision::Keep);
+      CHECK(layoutfix::decide_context({"qx"}, {"ну"}, english, ukrainian, 3) ==
+                        Decision::Keep);
 
   layoutfix::WordBuffer buffer;
   buffer.set_group(0);
@@ -115,14 +123,24 @@ int main() {
     CHECK(real.contains("привіт"));
     CHECK(real.contains("ПРИВІТ"));
 
-            if (real.has_morphology()) {
-                  layoutfix::Dictionary real_english;
-                  CHECK(real_english.load_file("/usr/share/hunspell/en_US.dic"));
-                  CHECK(real.contains("привіту"));
-                  CHECK(!real_english.contains("ghbdne"));
-                  CHECK(layoutfix::decide("ghbdne", "привіту", real_english, real, 3) ==
-                                    Decision::Switch);
-            }
+    if (real.has_morphology()) {
+      layoutfix::Dictionary real_english;
+      CHECK(real_english.load_file("/usr/share/hunspell/en_US.dic"));
+      CHECK(real.contains("привіту"));
+      CHECK(!real_english.contains("ghbdne"));
+      CHECK(layoutfix::decide("ghbdne", "привіту", real_english, real, 3) ==
+            Decision::Switch);
+      CHECK(real.contains("ну"));
+      CHECK(real.contains("і"));
+      CHECK(real.contains("що"));
+      CHECK(real_english.contains("ye"));
+      CHECK(real_english.contains("s"));
+      CHECK(!real_english.contains("oj"));
+      CHECK(layoutfix::decide_context({"ye", "s"}, {"ну", "і"},
+                                      real_english, real, 3) == Decision::Keep);
+      CHECK(layoutfix::decide_context({"ye", "s", "oj"}, {"ну", "і", "що"},
+                                      real_english, real, 3) == Decision::Switch);
+    }
   } else {
     std::cerr << "FAIL немає uk_UA.dic для перевірки справжнього словника\n";
     ++failures;
