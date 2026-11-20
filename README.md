@@ -38,15 +38,14 @@ ctest --test-dir build --output-on-failure
 
 ## Автозапуск
 
-Після встановлення в `/usr/local`:
+Один спосіб: user-сервіс systemd. Бінарник має лежати в `/usr/local/bin` (встановлення просить пароль).
 
 ```bash
-cmake --install build
-mkdir -p ~/.config/autostart ~/.config/systemd/user
-cp data/layout-fix.desktop ~/.config/autostart/
+sudo cmake --install build
+mkdir -p ~/.config/systemd/user
 cp data/layout-fix.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now layout-fix.service
 ```
 
-Достатньо одного зі способів: або пункт автозапуску Cinnamon, або user-сервіс systemd.
+`data/layout-fix.desktop` у `~/.config/autostart/` не класти. Файл лишається в репозиторії й потрапляє в меню після `cmake --install`, але разом із сервісом дає другий запуск.

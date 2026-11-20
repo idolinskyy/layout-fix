@@ -1,3 +1,4 @@
+# Єдиний автозапуск. data/layout-fix.desktop у ~/.config/autostart/ не копіювати.
 [Unit]
 Description=Виправлення помилкової розкладки клавіатури
 PartOf=graphical-session.target
