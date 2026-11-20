@@ -1,0 +1,13 @@
+[Unit]
+Description=Виправлення помилкової розкладки клавіатури
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/layout-fix
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
