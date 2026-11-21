@@ -8,6 +8,7 @@
 #include <QEventLoop>
 #include <QFormLayout>
 #include <QFont>
+#include <QHBoxLayout>
 #include <QIcon>
 #include <QKeySequence>
 #include <QKeySequenceEdit>
@@ -17,6 +18,7 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPixmap>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QSystemTrayIcon>
 #include <QVBoxLayout>
@@ -211,7 +213,8 @@ int App::run(Config config, bool check_only) {
               {"/usr/share/hunspell/uk_UA.dic",
                LAYOUT_FIX_DATA_DIR "/uk_UA.dic", "data/dicts/uk_UA.dic",
                "../data/dicts/uk_UA.dic", "../../data/dicts/uk_UA.dic"});
-  const auto ru_path = resolve("", {"/usr/share/hunspell/ru_RU.dic"});
+  const auto ru_path =
+      resolve(config.dict_ru, {"/usr/share/hunspell/ru_RU.dic"});
   Dictionary english_dict;
   Dictionary ukrainian_dict;
   Dictionary russian_dict;
@@ -346,6 +349,21 @@ int App::run(Config config, bool check_only) {
   std::vector<EchoKey> pending_echoes;
   auto inject_deadline = std::chrono::steady_clock::now();
   unsigned long seen_window = 0;
+  std::string last_app_wm_class;
+  auto track_last_window = [&] {
+    const std::string &candidate =
+        !focus.wm_class().empty() ? focus.wm_class() : focus.wm_name();
+    if (candidate.empty()) {
+      return;
+    }
+    const std::string lowered = utf8::casefold(candidate);
+    if (lowered == "layout-fix" || lowered == "cinnamon" ||
+        lowered == "nemo-desktop") {
+      return;
+    }
+    last_app_wm_class = candidate;
+  };
+  track_last_window();
 
   auto key_in = [](unsigned keycode, const std::vector<unsigned> &keys) {
     for (unsigned key : keys) {
@@ -495,6 +513,9 @@ int App::run(Config config, bool check_only) {
     update_tray();
   });
   QObject::connect(settings_action, &QAction::triggered, [&] {
+    drain_ctrl();
+    track_last_window();
+
     QDialog dialog;
     dialog.setWindowTitle(QStringLiteral("Налаштування layout-fix"));
     dialog.setMinimumWidth(480);
@@ -542,7 +563,39 @@ int App::run(Config config, bool check_only) {
     }
     excluded_windows->setPlainText(excluded_lines.join('\n'));
     excluded_windows->setMinimumHeight(110);
-    form->addRow(QStringLiteral("Не виправляти у вікнах"), excluded_windows);
+    auto *exclude_box = new QVBoxLayout;
+    exclude_box->setContentsMargins(0, 0, 0, 0);
+    exclude_box->addWidget(excluded_windows);
+    auto *last_window_row = new QHBoxLayout;
+    last_window_row->setContentsMargins(0, 0, 0, 0);
+    const QString last_wm = QString::fromStdString(last_app_wm_class);
+    auto *last_window_label = new QLabel(
+        last_wm.isEmpty()
+            ? QStringLiteral("Останнє вікно: невідоме")
+            : QStringLiteral("Останнє вікно: %1").arg(last_wm));
+    auto *add_last_window = new QPushButton(QStringLiteral("Додати"));
+    add_last_window->setEnabled(!last_wm.isEmpty());
+    QObject::connect(add_last_window, &QPushButton::clicked, [&] {
+      if (last_wm.isEmpty()) {
+        return;
+      }
+      QStringList lines = excluded_windows->toPlainText().split('\n');
+      for (const auto &line : lines) {
+        if (line.trimmed().compare(last_wm, Qt::CaseInsensitive) == 0) {
+          return;
+        }
+      }
+      QString text = excluded_windows->toPlainText();
+      if (!text.isEmpty() && !text.endsWith('\n')) {
+        text += '\n';
+      }
+      text += last_wm;
+      excluded_windows->setPlainText(text);
+    });
+    last_window_row->addWidget(last_window_label, 1);
+    last_window_row->addWidget(add_last_window);
+    exclude_box->addLayout(last_window_row);
+    form->addRow(QStringLiteral("Не виправляти у вікнах"), exclude_box);
 
     auto *ignored_words_edit = new QPlainTextEdit;
     ignored_words_edit->setPlaceholderText(
@@ -760,6 +813,7 @@ int App::run(Config config, bool check_only) {
     }
     if (focus.window_id() != seen_window) {
       seen_window = focus.window_id();
+      track_last_window();
       clear_input();
       undo.valid = false;
     }

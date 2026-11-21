@@ -336,6 +336,8 @@ Config load_config(const std::string& path, bool debug_keys) {
             cfg.dict_en = expand_home(std::move(value));
         } else if (key == "dict-uk") {
             cfg.dict_uk = expand_home(std::move(value));
+        } else if (key == "dict-ru") {
+            cfg.dict_ru = expand_home(std::move(value));
         } else if (key == "exclude") {
             cfg.exclude = split_csv(value);
         } else if (key == "ignore-words") {
@@ -382,6 +384,9 @@ bool save_config_file(const Config &config, const std::string &path) {
     }
     if (!config.dict_uk.empty()) {
         out << "dict-uk=" << config.dict_uk << '\n';
+    }
+    if (!config.dict_ru.empty()) {
+        out << "dict-ru=" << config.dict_ru << '\n';
     }
     out << "exclude=";
     for (std::size_t i = 0; i < config.exclude.size(); ++i) {

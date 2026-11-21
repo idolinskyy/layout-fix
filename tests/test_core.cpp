@@ -38,6 +38,7 @@ int main() {
   saved_config.min_length = 5;
   saved_config.dict_en = "/tmp/en_US.dic";
   saved_config.dict_uk = "/tmp/uk_UA.dic";
+  saved_config.dict_ru = "/tmp/ru_RU.dic";
   saved_config.exclude = {"terminal-a", "terminal-b"};
   saved_config.ignore_words = {"kubectl", "Діма"};
   saved_config.pause_key = "F8";
@@ -51,12 +52,31 @@ int main() {
   CHECK(loaded_config.min_length == saved_config.min_length);
   CHECK(loaded_config.dict_en == saved_config.dict_en);
   CHECK(loaded_config.dict_uk == saved_config.dict_uk);
+  CHECK(loaded_config.dict_ru == saved_config.dict_ru);
   CHECK(loaded_config.exclude == saved_config.exclude);
   CHECK(loaded_config.ignore_words == saved_config.ignore_words);
   CHECK(loaded_config.pause_key == saved_config.pause_key);
   CHECK(loaded_config.undo_key == saved_config.undo_key);
   CHECK(loaded_config.convert_key == saved_config.convert_key);
   std::filesystem::remove_all(config_test_dir);
+
+  // Default exclude list includes common terminals and password managers.
+  const layoutfix::Config default_cfg;
+  auto has_default_exclude = [&](std::string_view name) {
+    for (const auto &item : default_cfg.exclude) {
+      if (item == name) {
+        return true;
+      }
+    }
+    return false;
+  };
+  CHECK(has_default_exclude("gnome-terminal"));
+  CHECK(has_default_exclude("alacritty"));
+  CHECK(has_default_exclude("kitty"));
+  CHECK(has_default_exclude("konsole"));
+  CHECK(has_default_exclude("keepassxc"));
+  CHECK(has_default_exclude("bitwarden"));
+  CHECK(has_default_exclude("layout-fix"));
 
   const auto hk_pause = layoutfix::parse_hotkey("Pause");
   CHECK(hk_pause.keysym == "Pause" && !hk_pause.shift && !hk_pause.ctrl &&

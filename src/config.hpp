@@ -13,12 +13,24 @@ struct Config {
   int min_length = 3;
   std::string dict_en;
   std::string dict_uk;
+  std::string dict_ru;
   std::vector<std::string> exclude{"gnome-terminal",
                                    "terminator",
                                    "xterm",
+                                   "alacritty",
+                                   "kitty",
+                                   "konsole",
+                                   "tilix",
+                                   "xfce4-terminal",
+                                   "wezterm",
+                                   "urxvt",
+                                   "mate-terminal",
                                    "cinnamon-screensaver",
                                    "org.cinnamon.ScreenSaver",
                                    "gcr-prompter",
+                                   "keepassxc",
+                                   "bitwarden",
+                                   "1password",
                                    "layout-fix"};
   std::vector<std::string> ignore_words;
   std::string pause_key = "Pause";
