@@ -5,6 +5,7 @@
 #include "input/echoes.hpp"
 #include "input/undo_restore.hpp"
 #include "input/word_buffer.hpp"
+#include "tray_state.hpp"
 #include "utf8.hpp"
 
 #include <array>
@@ -362,6 +363,12 @@ int main() {
         UndoRestore::Shown);
   CHECK(layoutfix::choose_undo_restore(false, Lang::Other, Lang::En,
                                        Lang::Uk) == UndoRestore::Drop);
+
+  using layoutfix::TrayMode;
+  CHECK(layoutfix::choose_tray_mode(false, true) == TrayMode::Active);
+  CHECK(layoutfix::choose_tray_mode(true, true) == TrayMode::Paused);
+  CHECK(layoutfix::choose_tray_mode(false, false) == TrayMode::Desynced);
+  CHECK(layoutfix::choose_tray_mode(true, false) == TrayMode::PausedDesynced);
 
   const std::filesystem::path candidates[] = {
       "/usr/share/hunspell/uk_UA.dic",

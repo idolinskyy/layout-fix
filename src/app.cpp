@@ -33,6 +33,7 @@
 #include "layout/groups.hpp"
 #include "log.hpp"
 #include "timing.hpp"
+#include "tray_state.hpp"
 #include "utf8.hpp"
 #include "x11/clipboard.hpp"
 #include "x11/connection.hpp"
@@ -95,15 +96,20 @@ const char *cinnamon_source_id(Lang language) {
 }
 
 #ifdef LAYOUT_FIX_HAVE_QT_TRAY
-QIcon layout_icon(Lang language, bool paused) {
+QIcon layout_icon(Lang language, TrayMode mode) {
   QPixmap pixmap(32, 32);
   pixmap.fill(Qt::transparent);
   QPainter painter(&pixmap);
   painter.setRenderHint(QPainter::Antialiasing);
   painter.setPen(Qt::NoPen);
   const QColor active_color("#378b57");
+  const QColor desynced_color("#c97a16");
   const int gray = qGray(active_color.rgb());
-  painter.setBrush(paused ? QColor(gray, gray, gray) : active_color);
+  const QColor bg =
+      (mode == TrayMode::Paused || mode == TrayMode::PausedDesynced)
+          ? QColor(gray, gray, gray)
+          : (mode == TrayMode::Desynced ? desynced_color : active_color);
+  painter.setBrush(bg);
   painter.drawEllipse(2, 2, 28, 28);
   painter.setPen(Qt::white);
   painter.setFont(QFont("Sans", 10, QFont::DemiBold));
@@ -384,28 +390,60 @@ int App::run(Config config, bool check_only) {
                        });
     }
   };
-  auto update_tray = [&] {
+  bool has_tray_state = false;
+  Lang last_tray_lang = Lang::Other;
+  TrayMode last_tray_mode = TrayMode::Active;
+  auto update_tray = [&](bool force = false) {
     const Lang active_language = groups.language_of(groups.current_group());
+    const TrayMode mode = choose_tray_mode(paused, maps_ready);
+    if (!force && has_tray_state && active_language == last_tray_lang &&
+        mode == last_tray_mode) {
+      if (!tray.isVisible() && QSystemTrayIcon::isSystemTrayAvailable()) {
+        tray.show();
+      }
+      return;
+    }
+    has_tray_state = true;
+    last_tray_lang = active_language;
+    last_tray_mode = mode;
+
+    QString state_text;
+    QString tooltip_state;
+    switch (mode) {
+    case TrayMode::Active:
+      state_text = QStringLiteral("працює");
+      tooltip_state = QStringLiteral("працює");
+      break;
+    case TrayMode::Paused:
+      state_text = QStringLiteral("пауза");
+      tooltip_state = QStringLiteral("пауза");
+      break;
+    case TrayMode::Desynced:
+      state_text = QStringLiteral("XKB/Cinnamon не узгоджені");
+      tooltip_state = QStringLiteral(
+          "XKB і Cinnamon не узгоджені (виправлення призупинено)");
+      break;
+    case TrayMode::PausedDesynced:
+      state_text = QStringLiteral("пауза (XKB/Cinnamon не узгоджені)");
+      tooltip_state = QStringLiteral("пауза · XKB і Cinnamon не узгоджені");
+      break;
+    }
     status_action->setText(
         QStringLiteral("Стан: %1 · мова: %2")
-            .arg(paused ? QStringLiteral("пауза")
-                        : QStringLiteral("працює"),
-                 language_label(active_language)));
+            .arg(state_text, language_label(active_language)));
     pause_action->setText(paused ? "Відновити" : "Пауза");
     for (const auto &[language, action] : language_actions) {
       action->setChecked(language == active_language);
     }
-    tray.setIcon(layout_icon(active_language, paused));
+    tray.setIcon(layout_icon(active_language, mode));
     tray.setToolTip(QStringLiteral("layout-fix · %1 · %2")
-                        .arg(paused ? QStringLiteral("пауза")
-                                    : QStringLiteral("працює"),
-                             language_label(active_language)));
+                        .arg(tooltip_state, language_label(active_language)));
     if (!tray.isVisible() && QSystemTrayIcon::isSystemTrayAvailable()) {
       tray.show();
     }
   };
   rebuild_language_menu();
-  update_tray();
+  update_tray(true);
   if (!QSystemTrayIcon::isSystemTrayAvailable()) {
     log::error("системний трей недоступний; керування лишається на клавіатурі");
   }
@@ -541,10 +579,10 @@ int App::run(Config config, bool check_only) {
         QStringLiteral("<h3>layout-fix %1</h3>"
                        "<p>Автоматичне виправлення розкладки для X11 і Cinnamon.</p>"
                        "<p>Мови: English (US), українська та російська.</p>"
-                       "<p>Ліцензія коду: GPL-3.0-or-later.<br>"
+                       "<p>Ліцензія коду: GPL-3.0-or-later.</p>"
                        "<br>"
-                       "© 2026 Ihor Dolinskyi"
-                       "Fallback-словник uk_UA: MPL-2.0.</p>")
+                       "<p>© 2026 Ihor Dolinskyi<p/>"
+                       "<p>Fallback-словник uk_UA: MPL-2.0.</p>")
             .arg(QApplication::applicationVersion());
     QMessageBox::about(nullptr, QStringLiteral("Про програму"), text);
     update_tray();
@@ -613,9 +651,10 @@ int App::run(Config config, bool check_only) {
       undo.valid = false;
       maps_ready = false;
       refresh_groups_pending = cinnamon.refresh();
-    #ifdef LAYOUT_FIX_HAVE_QT_TRAY
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
       rebuild_language_menu();
-    #endif
+      update_tray(true);
+#endif
       map_retry_at = std::chrono::steady_clock::now() +
                      std::chrono::milliseconds(250);
       log::error("Cinnamon змінив джерела; виправлення призупинено до оновлення XKB");
@@ -625,6 +664,10 @@ int App::run(Config config, bool check_only) {
       if (groups.init(false) && source_map_matches()) {
         maps_ready = true;
         refresh_groups_pending = false;
+#ifdef LAYOUT_FIX_HAVE_QT_TRAY
+        rebuild_language_menu();
+        update_tray(true);
+#endif
         log::info("мапи XKB і Cinnamon оновлено");
       } else {
         map_retry_at = std::chrono::steady_clock::now() +

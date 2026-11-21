@@ -8,7 +8,7 @@ architecture="$(uname -m)"
 build_dir="${BUILD_DIR:-$root_dir/build/release}"
 dist_dir="${DIST_DIR:-$root_dir/dist}"
 install_prefix="/usr"
-qt_prefix="${QT_PREFIX:-${HOME:-}/Qt/6.12.0/gcc_64}"
+qt_prefix="${QT_PREFIX:-}"
 jobs="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '2')}"
 
 for dictionary in en_US uk_UA ru_RU; do
@@ -37,7 +37,7 @@ fi
 
 if [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then
   cmake_args+=("-DCMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH")
-elif [[ -f "$qt_prefix/lib/cmake/Qt6/Qt6Config.cmake" ]]; then
+elif [[ -n "$qt_prefix" && -f "$qt_prefix/lib/cmake/Qt6/Qt6Config.cmake" ]]; then
   cmake_args+=("-DCMAKE_PREFIX_PATH=$qt_prefix")
 fi
 
@@ -59,9 +59,10 @@ mkdir -p "$docs_dir"
 cp "$root_dir/README.md" "$docs_dir/README.md"
 cat > "$docs_dir/RUNTIME-DEPENDENCIES.txt" <<'EOF'
 This build targets Linux/X11 with Cinnamon.
-It requires Qt 6.12 Widgets, Hunspell runtime and en_US, uk_UA, and ru_RU
-dictionaries, plus the X11, XTest, xkbcommon, and GLib runtime libraries.
-If Qt was installed with the Qt Installer outside the system library path,
+It requires Qt 6 Widgets (system libqt6widgets6t64/libqt6widgets6 and qt6-qpa-plugins),
+Hunspell runtime and en_US, uk_UA, and ru_RU dictionaries, plus the X11, XTest,
+xkbcommon, and GLib runtime libraries.
+If built against a custom Qt installation outside the system library path,
 set QT_PREFIX to its gcc_64 directory before starting layout-fix.
 EOF
 

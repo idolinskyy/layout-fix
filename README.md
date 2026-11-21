@@ -4,7 +4,7 @@
 
 Демон читає події клавіатури в межах X11-сесії, тримає поточне слово в пам'яті й не записує його на диск. Звичайний журнал не містить набраного тексту. `--debug-keys` виводить символи в stderr, тому не вмикай його під час введення паролів чи інших секретів.
 
-Керування з клавіатури й меню трея. Значок показує код поточної мови; у паузі він сірий. У меню є Pause/Resume, вибір джерела Cinnamon, налаштування, About і вихід:
+Керування з клавіатури й меню трея. Значок показує код поточної мови: зелений у роботі, сірий у паузі, помаранчевий — коли XKB і джерела Cinnamon тимчасово не узгоджені й виправлення призупинено. У меню є Pause/Resume, вибір джерела Cinnamon, налаштування, About і вихід:
 
 - `Pause` ставить демон на паузу і знімає її. Під час паузи автоматичне виправлення, скасування та виправлення виділеного тексту не працюють. Перед паролем увімкніть паузу.
 - `Shift+Pause` скасовує останнє виправлення, якщо після нього ще не почато наступне слово.
@@ -12,20 +12,19 @@
 
 ## Збірка
 
-Потрібні пакети: `build-essential`, `cmake`, `pkg-config`, `libx11-dev`, `libxtst-dev`, `libxkbcommon-dev`, `libglib2.0-dev`, `hunspell-en-us`, `hunspell-uk`, `hunspell-ru`, `libhunspell-dev`. Без `libhunspell-dev` демон перевіряє точні основи з `.dic`. Файли `.aff` автоматично підхоплюються поруч із `.dic`. Без Qt 6.12+ Widgets tray menu недоступне, але гарячі клавіші та автоматичне виправлення працюють.
+Потрібні пакети: `build-essential`, `cmake`, `pkg-config`, `libx11-dev`, `libxtst-dev`, `libxkbcommon-dev`, `libglib2.0-dev`, `hunspell-en-us`, `hunspell-uk`, `hunspell-ru`, `libhunspell-dev`, `qt6-base-dev`. Без `libhunspell-dev` демон перевіряє точні основи з `.dic`. Файли `.aff` автоматично підхоплюються поруч із `.dic`. Без Qt 6 Widgets tray menu недоступне, але гарячі клавіші та автоматичне виправлення працюють.
 
-Для меню трея потрібен Qt 6.12 або новіший із модулем Widgets. Передай каталог `gcc_64` через `CMAKE_PREFIX_PATH`; для запуску додай його до `QT_PREFIX`:
+Зі встановленим системним `qt6-base-dev` (Qt 6.2+/6.4+) проєкт збирається і запускається без додаткових змінних середовища:
 
 ```bash
-export QT_PREFIX="$HOME/Qt/6.12.3/gcc_64"
-cmake -S . -B build -DCMAKE_PREFIX_PATH="$QT_PREFIX"
+cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
-QT_PREFIX="$QT_PREFIX" ./build/layout-fix --check
-QT_PREFIX="$QT_PREFIX" ./build/layout-fix
+./build/layout-fix --check
+./build/layout-fix
 ```
 
-Для Linux-артефактів релізу виконай `scripts/build-release.sh`. Скрипт перевіряє словники, збирає Release, проганяє тести та створює versioned `.tar.gz` і `.deb` у `dist/`; версію бере з CMake. До кожного файла додається `.sha256`. Пакети не містять системних бібліотек. Для встановлення Debian-пакета:
+Для Linux-артефактів релізу виконай `scripts/build-release.sh`. Скрипт перевіряє словники, збирає Release (за замовчуванням із системним Qt 6, якщо встановлено `qt6-base-dev`), проганяє тести та створює versioned `.tar.gz` і `.deb` у `dist/`; версію бере з CMake. До кожного файла додається `.sha256`. Debian-пакет залежить від системних бібліотек (зокрема `libqt6widgets6t64 | libqt6widgets6` і `qt6-qpa-plugins`), тому після встановлення працює одразу:
 
 ```bash
 sudo apt install ./dist/layout-fix_0.2.0_amd64.deb
@@ -33,17 +32,19 @@ systemctl --user daemon-reload
 systemctl --user enable --now layout-fix.service
 ```
 
-Якщо Qt встановлена не в стандартний каталог, задай шлях для прямого запуску:
+Якщо використовується нестандартний Qt (наприклад, із Qt Installer у `$HOME/Qt/...`), передай каталог `gcc_64` через `CMAKE_PREFIX_PATH` під час збірки та `QT_PREFIX` під час запуску:
 
 ```bash
-QT_PREFIX="$HOME/Qt/6.12.3/gcc_64" /usr/bin/layout-fix
+export QT_PREFIX="$HOME/Qt/6.12.0/gcc_64"
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$QT_PREFIX"
+QT_PREFIX="$QT_PREFIX" /usr/bin/layout-fix
 ```
 
-Для user-service задай той самий шлях у drop-in через `systemctl --user edit layout-fix`:
+Для user-service із нестандартним Qt задай `QT_PREFIX` у drop-in через `systemctl --user edit layout-fix`:
 
 ```ini
 [Service]
-Environment=QT_PREFIX=%h/Qt/6.12.3/gcc_64
+Environment=QT_PREFIX=%h/Qt/6.12.0/gcc_64
 ```
 
 `VERSION` можна передати в `scripts/build-release.sh`, якщо треба перевизначити CMake-версію.

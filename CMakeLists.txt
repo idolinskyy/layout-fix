@@ -20,11 +20,44 @@ option(LAYOUT_FIX_REQUIRE_HUNSPELL "Fail if Hunspell development files are unava
 if(LAYOUT_FIX_REQUIRE_HUNSPELL AND NOT HUNSPELL_FOUND)
   message(FATAL_ERROR "Hunspell development files are required for the release")
 endif()
-find_package(Qt6 6.12 QUIET COMPONENTS Widgets
-  HINTS "$ENV{HOME}/Qt/6.12.0/gcc_64/lib/cmake/Qt6")
-option(LAYOUT_FIX_REQUIRE_QT_TRAY "Fail if Qt 6.12 Widgets is unavailable" OFF)
+find_package(Qt6 QUIET COMPONENTS Widgets)
+if(NOT Qt6Widgets_FOUND)
+  set(_layout_fix_qt_prefixes "")
+  if(DEFINED ENV{QT_PREFIX} AND NOT "$ENV{QT_PREFIX}" STREQUAL "")
+    list(APPEND _layout_fix_qt_prefixes "$ENV{QT_PREFIX}")
+  endif()
+  file(GLOB _layout_fix_local_qt6 "$ENV{HOME}/Qt/6.*/gcc_64")
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+    list(SORT _layout_fix_local_qt6 COMPARE NATURAL ORDER DESCENDING)
+  else()
+    list(SORT _layout_fix_local_qt6 ORDER DESCENDING)
+  endif()
+  list(APPEND _layout_fix_qt_prefixes ${_layout_fix_local_qt6})
+  if(_layout_fix_qt_prefixes)
+    list(APPEND CMAKE_PREFIX_PATH ${_layout_fix_qt_prefixes})
+    unset(Qt6_DIR CACHE)
+    find_package(Qt6 QUIET COMPONENTS Widgets)
+  endif()
+endif()
+option(LAYOUT_FIX_REQUIRE_QT_TRAY "Fail if Qt 6 Widgets is unavailable" OFF)
 if(LAYOUT_FIX_REQUIRE_QT_TRAY AND NOT Qt6Widgets_FOUND)
-  message(FATAL_ERROR "Qt 6.12 Widgets is required for the release tray menu")
+  message(FATAL_ERROR "Qt 6 Widgets is required for the release tray menu (install qt6-base-dev or set CMAKE_PREFIX_PATH/QT_PREFIX)")
+endif()
+
+set(LAYOUT_FIX_DEFAULT_QT_PREFIX "")
+set(LAYOUT_FIX_USING_SYSTEM_QT OFF)
+if(Qt6Widgets_FOUND)
+  if(Qt6Widgets_DIR MATCHES "^/usr/")
+    set(LAYOUT_FIX_USING_SYSTEM_QT ON)
+  else()
+    get_filename_component(_qt_cmake_dir "${Qt6Widgets_DIR}" DIRECTORY)
+    get_filename_component(_qt_lib_dir "${_qt_cmake_dir}" DIRECTORY)
+    get_filename_component(_qt_prefix "${_qt_lib_dir}" DIRECTORY)
+    if(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+      string(REPLACE "$ENV{HOME}" "\${HOME:-}" _qt_prefix "${_qt_prefix}")
+    endif()
+    set(LAYOUT_FIX_DEFAULT_QT_PREFIX "${_qt_prefix}")
+  endif()
 endif()
 
 add_executable(layout-fix
@@ -49,6 +82,8 @@ configure_file(data/layout-fix.desktop.in
   ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.desktop @ONLY)
 configure_file(data/layout-fix.service.in
   ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.service @ONLY)
+configure_file(data/layout-fix-launcher.in
+  ${CMAKE_CURRENT_BINARY_DIR}/layout-fix-launcher @ONLY)
 
 target_include_directories(layout-fix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(layout-fix PRIVATE
@@ -63,9 +98,13 @@ target_link_libraries(layout-fix PRIVATE
 if(Qt6Widgets_FOUND)
   target_link_libraries(layout-fix PRIVATE Qt6::Widgets)
   target_compile_definitions(layout-fix PRIVATE LAYOUT_FIX_HAVE_QT_TRAY=1)
-  message(STATUS "Qt 6.12 system tray enabled")
+  if(LAYOUT_FIX_USING_SYSTEM_QT)
+    message(STATUS "Qt ${Qt6Widgets_VERSION} system tray enabled (system Qt)")
+  else()
+    message(STATUS "Qt ${Qt6Widgets_VERSION} system tray enabled (custom prefix: ${Qt6Widgets_DIR})")
+  endif()
 else()
-  message(STATUS "Qt 6.12 Widgets not found; tray indicator disabled")
+  message(STATUS "Qt 6 Widgets not found; tray indicator disabled")
 endif()
 
 add_executable(layout-fix-test
@@ -94,7 +133,7 @@ enable_testing()
 add_test(NAME core COMMAND layout-fix-test)
 
 install(TARGETS layout-fix RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
-install(PROGRAMS data/layout-fix-launcher
+install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/layout-fix-launcher
   DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME layout-fix)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.desktop
   DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
@@ -113,11 +152,16 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
   "Keyboard layout correction for X11 and Cinnamon")
 set(CPACK_PACKAGE_DESCRIPTION
-  "Corrects text entered with the wrong keyboard layout. Supports English (US), Ukrainian, and Russian when exactly one active dictionary accepts the word or context. The Qt 6.12 tray menu provides pause, layout switching, config access, and quit.")
+  "Corrects text entered with the wrong keyboard layout and converts selected text. Supports English (US), Ukrainian, and Russian when exactly one active dictionary accepts the word or context. The Qt 6 tray menu provides pause, layout switching, settings, About, and quit.")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "layout-fix project")
 set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS
+set(LAYOUT_FIX_DEB_DEPENDS
   "libx11-6, libxtst6, libxkbcommon0, libglib2.0-0, libhunspell-1.7-0, hunspell-en-us, hunspell-uk, hunspell-ru")
+if(Qt6Widgets_FOUND)
+  string(APPEND LAYOUT_FIX_DEB_DEPENDS
+    ", libqt6widgets6t64 | libqt6widgets6, qt6-qpa-plugins")
+endif()
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "${LAYOUT_FIX_DEB_DEPENDS}")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
 include(CPack)
