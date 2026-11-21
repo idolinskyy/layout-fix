@@ -28,7 +28,7 @@ QT_PREFIX="$QT_PREFIX" ./build/layout-fix
 Для Linux-артефактів релізу виконай `scripts/build-release.sh`. Скрипт перевіряє словники, збирає Release, проганяє тести та створює versioned `.tar.gz` і `.deb` у `dist/`; версію бере з CMake. До кожного файла додається `.sha256`. Пакети не містять системних бібліотек. Для встановлення Debian-пакета:
 
 ```bash
-sudo apt install ./dist/layout-fix_0.1.0_amd64.deb
+sudo apt install ./dist/layout-fix_0.2.0_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now layout-fix.service
 ```

@@ -7,7 +7,6 @@
 
 #include <chrono>
 #include <poll.h>
-#include <vector>
 
 namespace layoutfix {
 namespace {

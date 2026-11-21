@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(VERSION 0.1.0 CACHE STRING "layout-fix package version")
+set(VERSION 0.2.0 CACHE STRING "layout-fix package version")
 project(layout-fix VERSION ${VERSION} LANGUAGES CXX)
 
 include(GNUInstallDirs)
