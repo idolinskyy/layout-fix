@@ -120,14 +120,15 @@ void Clipboard::pump_requests() {
     }
 }
 
-Clipboard::ReadStatus Clipboard::read_target(unsigned long target_atom,
+Clipboard::ReadStatus Clipboard::read_target(unsigned long selection_atom,
+                                             unsigned long target_atom,
                                              int timeout_ms, std::string& out) {
     auto* dpy = x11_.ctrl();
     if (dpy == nullptr || window_ == 0) {
         return ReadStatus::Rejected;
     }
     XDeleteProperty(dpy, window_, prop_atom_);
-    XConvertSelection(dpy, clipboard_atom_, target_atom, prop_atom_, window_,
+    XConvertSelection(dpy, selection_atom, target_atom, prop_atom_, window_,
                       CurrentTime);
     XFlush(dpy);
 
@@ -139,7 +140,7 @@ Clipboard::ReadStatus Clipboard::read_target(unsigned long target_atom,
 
         XEvent ev;
         if (XCheckTypedWindowEvent(dpy, window_, SelectionNotify, &ev)) {
-            if (ev.xselection.selection != clipboard_atom_) {
+            if (ev.xselection.selection != selection_atom) {
                 continue;
             }
             if (ev.xselection.property == None) {
@@ -201,14 +202,57 @@ bool Clipboard::read(int timeout_ms, std::string& out) {
         out = owned_text_;
         return true;
     }
-    const auto utf8_status = read_target(utf8_atom_, timeout_ms, out);
+    const auto utf8_status =
+        read_target(clipboard_atom_, utf8_atom_, timeout_ms, out);
     if (utf8_status == ReadStatus::Ok) {
         return true;
     }
     if (utf8_status == ReadStatus::Timeout) {
         return false;
     }
-    return read_target(XA_STRING, timeout_ms, out) == ReadStatus::Ok;
+    return read_target(clipboard_atom_, XA_STRING, timeout_ms, out) ==
+           ReadStatus::Ok;
+}
+
+bool Clipboard::read_primary(int timeout_ms, std::string& out) {
+    out.clear();
+    auto* dpy = x11_.ctrl();
+    if (dpy == nullptr || window_ == 0) {
+        return false;
+    }
+    const Window owner = XGetSelectionOwner(dpy, XA_PRIMARY);
+    if (owner == None || owner == window_) {
+        return false;
+    }
+    const auto utf8_status =
+        read_target(XA_PRIMARY, utf8_atom_, timeout_ms, out);
+    if (utf8_status == ReadStatus::Ok) {
+        return true;
+    }
+    if (utf8_status == ReadStatus::Timeout) {
+        return false;
+    }
+    return read_target(XA_PRIMARY, XA_STRING, timeout_ms, out) ==
+           ReadStatus::Ok;
+}
+
+bool Clipboard::read_custom_target(const char* target_name, int timeout_ms,
+                                   std::string& out) {
+    out.clear();
+    auto* dpy = x11_.ctrl();
+    if (dpy == nullptr || window_ == 0 || target_name == nullptr) {
+        return false;
+    }
+    const Window owner = XGetSelectionOwner(dpy, clipboard_atom_);
+    if (owner == None || owner == window_) {
+        return false;
+    }
+    const Atom target_atom = XInternAtom(dpy, target_name, True);
+    if (target_atom == None) {
+        return false;
+    }
+    return read_target(clipboard_atom_, target_atom, timeout_ms, out) ==
+           ReadStatus::Ok;
 }
 
 bool Clipboard::claim_sentinel() {

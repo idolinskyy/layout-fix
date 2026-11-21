@@ -39,6 +39,7 @@ int main() {
   saved_config.dict_en = "/tmp/en_US.dic";
   saved_config.dict_uk = "/tmp/uk_UA.dic";
   saved_config.exclude = {"terminal-a", "terminal-b"};
+  saved_config.ignore_words = {"kubectl", "Діма"};
   saved_config.pause_key = "F8";
   saved_config.undo_key = "Shift+F8";
   saved_config.convert_key = "Alt+F8";
@@ -51,6 +52,7 @@ int main() {
   CHECK(loaded_config.dict_en == saved_config.dict_en);
   CHECK(loaded_config.dict_uk == saved_config.dict_uk);
   CHECK(loaded_config.exclude == saved_config.exclude);
+  CHECK(loaded_config.ignore_words == saved_config.ignore_words);
   CHECK(loaded_config.pause_key == saved_config.pause_key);
   CHECK(loaded_config.undo_key == saved_config.undo_key);
   CHECK(loaded_config.convert_key == saved_config.convert_key);
@@ -71,6 +73,29 @@ int main() {
   CHECK(layoutfix::parse_hotkey("").keysym.empty());
   CHECK(layoutfix::parse_hotkey("Unknown+Pause").keysym.empty());
   CHECK(layoutfix::parse_hotkey("Alt+").keysym.empty());
+
+  // Qt QKeySequenceEdit portable text <-> X11 config hotkey conversion.
+  CHECK(layoutfix::hotkey_from_qt_sequence("Pause") == "Pause");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Shift+Pause") == "Shift+Pause");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Alt+Pause") == "Alt+Pause");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Meta+Esc") == "Super+Escape");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Ctrl+ScrollLock") ==
+        "Ctrl+Scroll_Lock");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Alt+PgUp") == "Alt+Prior");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Ctrl+Space") == "Ctrl+space");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Alt+`") == "Alt+grave");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Ctrl++") == "Ctrl+plus");
+  CHECK(layoutfix::hotkey_from_qt_sequence("Alt+Pause, Ctrl+X") == "Alt+Pause");
+  CHECK(layoutfix::hotkey_from_qt_sequence("").empty());
+  CHECK(layoutfix::hotkey_to_qt_sequence("Pause") == "Pause");
+  CHECK(layoutfix::hotkey_to_qt_sequence("Shift+Pause") == "Shift+Pause");
+  CHECK(layoutfix::hotkey_to_qt_sequence("Alt+Pause") == "Alt+Pause");
+  CHECK(layoutfix::hotkey_to_qt_sequence("Super+Escape") == "Meta+Esc");
+  CHECK(layoutfix::hotkey_to_qt_sequence("Ctrl+Scroll_Lock") ==
+        "Ctrl+ScrollLock");
+  CHECK(layoutfix::hotkey_to_qt_sequence("Alt+Prior") == "Alt+PgUp");
+  CHECK(layoutfix::hotkey_to_qt_sequence("Alt+grave") == "Alt+`");
+  CHECK(layoutfix::hotkey_to_qt_sequence("Ctrl+plus") == "Ctrl++");
 
   CHECK(layoutfix::utf8::casefold("Привіт") == "привіт");
   CHECK(layoutfix::utf8::casefold("HELLO") == "hello");
@@ -238,6 +263,27 @@ int main() {
   CHECK(!layoutfix::unique_language_candidate(
             {{{"Lkz", "hello"}, {"Для", "руддщ"}, {"Для", "руддщ"}}},
             layoutfix::Lang::En, amb_dicts, 3));
+
+  // Manual ignore-words protect words from auto-fixing (single, punctuation,
+  // multi-word context, case-insensitive).
+  const auto ignore_set =
+      layoutfix::build_ignore_set({"ghbdsn", "Lkz", "Діма"});
+  CHECK(layoutfix::is_ignored_word("GHBDSN", ignore_set));
+  CHECK(layoutfix::is_ignored_word("ghbdsn,", ignore_set));
+  CHECK(layoutfix::is_ignored_word("[ghbdsn]", ignore_set));
+  CHECK(layoutfix::is_ignored_word("діма.", ignore_set));
+  CHECK(!layoutfix::is_ignored_word("hello", ignore_set));
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"ghbdsn"}, {"привіт"}, {"привыт"}}}, layoutfix::Lang::En,
+            amb_dicts, 3, &ignore_set));
+  CHECK(!layoutfix::is_ambiguous_word({"Lkz", "Для", "Для"},
+                                      layoutfix::Lang::En, amb_dicts,
+                                      &ignore_set));
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"Lkz", "dblsktyjuj"},
+              {"Для", "виділеного"},
+              {"Для", "выдыленого"}}},
+            layoutfix::Lang::En, amb_dicts, 3, &ignore_set));
 
   // Force-convert last word (short, proper noun, ambiguous, and language cycling).
   const std::array<bool, 3> force_all{true, true, true};
@@ -444,6 +490,42 @@ int main() {
   const auto sel_unchanged = layoutfix::convert_selection(
       "12345", maps, sel_dicts, all_active, layoutfix::Lang::En);
   CHECK(!sel_unchanged.changed);
+
+  // Copy-line-on-empty-selection guard (VS Code, JetBrains, Sublime, Kate).
+  CHECK(layoutfix::is_copy_line_editor("Code", "code"));
+  CHECK(layoutfix::is_copy_line_editor("jetbrains-clion", "clion"));
+  CHECK(layoutfix::is_copy_line_editor("Sublime_text", "sublime_text"));
+  CHECK(layoutfix::is_copy_line_editor("antigravity", "Antigravity"));
+  CHECK(!layoutfix::is_copy_line_editor("firefox", "Navigator"));
+  CHECK(layoutfix::has_vscode_empty_selection_marker(
+      R"({"version":1,"isFromEmptySelection":true,"multicursorText":null})"));
+  // UTF-16LE encoded VS Code Pickle payload.
+  std::string utf16_marker;
+  for (char ch : std::string_view("\"isFromEmptySelection\":true")) {
+    utf16_marker.push_back(ch);
+    utf16_marker.push_back('\0');
+  }
+  CHECK(layoutfix::has_vscode_empty_selection_marker(utf16_marker));
+  CHECK(!layoutfix::has_vscode_empty_selection_marker(
+      R"({"version":1,"isFromEmptySelection":false})"));
+  // Empty-selection line copy in VS Code (even without trailing newline on last line).
+  CHECK(layoutfix::looks_like_empty_line_copy(
+      "int x = 1;", "", true, utf16_marker));
+  // Empty-selection line copy in JetBrains/Sublime (single line + '\n', PRIMARY mismatch).
+  CHECK(layoutfix::looks_like_empty_line_copy(
+      "    ghbdsn cdsn\n", "older selection", true, ""));
+  // Real partial selection in JetBrains/Sublime (no trailing '\n') -> allowed.
+  CHECK(!layoutfix::looks_like_empty_line_copy(
+      "ghbdsn cdsn", "", true, ""));
+  // Real multi-line selection in JetBrains/Sublime -> allowed.
+  CHECK(!layoutfix::looks_like_empty_line_copy(
+      "ghbdsn\ncdsn\n", "", true, ""));
+  // Explicit triple-click full-line selection (PRIMARY == selected) -> allowed.
+  CHECK(!layoutfix::looks_like_empty_line_copy(
+      "ghbdsn cdsn\n", "ghbdsn cdsn\n", true, ""));
+  // Non-copy-line app (Firefox/LibreOffice) -> allowed.
+  CHECK(!layoutfix::looks_like_empty_line_copy(
+      "ghbdsn cdsn\n", "", false, ""));
 
   using layoutfix::Lang;
   using layoutfix::UndoRestore;

@@ -20,6 +20,11 @@ public:
 
     // Читає текст із X11 CLIPBOARD (UTF8_STRING із fallback на XA_STRING).
     bool read(int timeout_ms, std::string& out);
+    // Читає текст із X11 PRIMARY (поточне виділення, без зміни CLIPBOARD).
+    bool read_primary(int timeout_ms, std::string& out);
+    // Читає довільний MIME/target із X11 CLIPBOARD (напр. chromium/x-web-custom-data).
+    bool read_custom_target(const char* target_name, int timeout_ms,
+                            std::string& out);
     // Тимчасово перехоплює володіння CLIPBOARD, щоб зловити SelectionClear після Ctrl+C.
     bool claim_sentinel();
     // Чекає на втрату володіння CLIPBOARD (програма скопіювала виділення).
@@ -33,7 +38,8 @@ public:
 
 private:
     enum class ReadStatus { Ok, Rejected, Timeout };
-    ReadStatus read_target(unsigned long target_atom, int timeout_ms,
+    ReadStatus read_target(unsigned long selection_atom,
+                           unsigned long target_atom, int timeout_ms,
                            std::string& out);
     void pump_requests();
 

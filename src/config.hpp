@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace layoutfix {
@@ -19,6 +20,7 @@ struct Config {
                                    "org.cinnamon.ScreenSaver",
                                    "gcr-prompter",
                                    "layout-fix"};
+  std::vector<std::string> ignore_words;
   std::string pause_key = "Pause";
   std::string undo_key = "Shift+Pause";
   std::string convert_key = "Alt+Pause";
@@ -34,9 +36,13 @@ struct Hotkey {
 };
 
 Hotkey parse_hotkey(std::string_view text);
+std::string hotkey_from_qt_sequence(std::string_view qt_portable);
+std::string hotkey_to_qt_sequence(std::string_view config_hotkey);
 Config load_config(const std::string &path, bool debug_keys);
 std::string default_config_path();
 std::string default_user_config_path();
 bool save_config_file(const Config &config, const std::string &path);
+std::unordered_set<std::string> build_ignore_set(
+    const std::vector<std::string> &words);
 
 } // namespace layoutfix

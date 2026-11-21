@@ -28,5 +28,11 @@ SelectionResult convert_selection(
     const std::array<const Dictionary*, 3>& dictionaries,
     const std::array<bool, 3>& active_languages, Lang current_language);
 
+bool is_copy_line_editor(std::string_view wm_class, std::string_view wm_name);
+bool has_vscode_empty_selection_marker(std::string_view raw_custom_data);
+bool looks_like_empty_line_copy(std::string_view selected,
+                                std::string_view primary, bool copy_line_editor,
+                                std::string_view web_custom_data);
+
 }  // namespace layoutfix
 

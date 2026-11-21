@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include "log.hpp"
+#include "utf8.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -64,50 +65,194 @@ std::string to_lower_ascii(std::string_view text) {
     return out;
 }
 
+struct KeyNamePair {
+    const char* qt_name;
+    const char* x11_name;
+};
+
+constexpr KeyNamePair kQtX11KeyMap[] = {
+    {"Esc", "Escape"},
+    {"Del", "Delete"},
+    {"Ins", "Insert"},
+    {"PgUp", "Prior"},
+    {"PgDown", "Next"},
+    {"Backspace", "BackSpace"},
+    {"Return", "Return"},
+    {"Enter", "Return"},
+    {"Space", "space"},
+    {"Tab", "Tab"},
+    {"Backtab", "Tab"},
+    {"ScrollLock", "Scroll_Lock"},
+    {"NumLock", "Num_Lock"},
+    {"CapsLock", "Caps_Lock"},
+    {"Pause", "Pause"},
+    {"Cancel", "Pause"},
+    {"Print", "Print"},
+    {"-", "minus"},
+    {"=", "equal"},
+    {"[", "bracketleft"},
+    {"]", "bracketright"},
+    {"\\", "backslash"},
+    {";", "semicolon"},
+    {"'", "apostrophe"},
+    {",", "comma"},
+    {".", "period"},
+    {"/", "slash"},
+    {"`", "grave"},
+    {"+", "plus"},
+};
+
+bool apply_modifier_token(std::string_view mod_lower, Hotkey& key) {
+    if (mod_lower == "shift") {
+        key.shift = true;
+        return true;
+    }
+    if (mod_lower == "ctrl" || mod_lower == "control") {
+        key.ctrl = true;
+        return true;
+    }
+    if (mod_lower == "alt" || mod_lower == "mod1") {
+        key.alt = true;
+        return true;
+    }
+    if (mod_lower == "super" || mod_lower == "win" || mod_lower == "meta") {
+        key.super = true;
+        return true;
+    }
+    return false;
+}
+
+std::string qt_key_to_x11(std::string_view key) {
+    const auto lower = to_lower_ascii(key);
+    for (const auto& pair : kQtX11KeyMap) {
+        if (to_lower_ascii(pair.qt_name) == lower) {
+            return pair.x11_name;
+        }
+    }
+    return std::string(key);
+}
+
+std::string x11_key_to_qt(std::string_view key) {
+    if (key == "Break") {
+        return "Pause";
+    }
+    for (const auto& pair : kQtX11KeyMap) {
+        if (key == pair.x11_name) {
+            return pair.qt_name;
+        }
+    }
+    return std::string(key);
+}
+
 }  // namespace
 
 Hotkey parse_hotkey(std::string_view text) {
     Hotkey key;
     key.keysym.clear();
-    const auto body = trim(text);
+    std::string body = trim(text);
     if (body.empty()) {
         return key;
     }
 
-    std::vector<std::string> parts;
-    std::size_t start = 0;
-    while (start <= body.size()) {
-        const auto plus = body.find('+', start);
-        const auto piece = body.substr(start, plus == std::string::npos
-                                                  ? std::string::npos
-                                                  : plus - start);
-        auto item = trim(piece);
-        if (item.empty()) {
-            return key;
-        }
-        parts.push_back(std::move(item));
-        if (plus == std::string::npos) {
+    std::string_view rest = body;
+    while (true) {
+        const auto plus = rest.find('+');
+        if (plus == std::string_view::npos) {
             break;
         }
-        start = plus + 1;
-    }
-
-    for (std::size_t i = 0; i + 1 < parts.size(); ++i) {
-        const auto mod = to_lower_ascii(parts[i]);
-        if (mod == "shift") {
-            key.shift = true;
-        } else if (mod == "ctrl" || mod == "control") {
-            key.ctrl = true;
-        } else if (mod == "alt" || mod == "mod1") {
-            key.alt = true;
-        } else if (mod == "super" || mod == "win" || mod == "meta") {
-            key.super = true;
-        } else {
+        const auto head = trim(rest.substr(0, plus));
+        const auto tail = trim(rest.substr(plus + 1));
+        if (head.empty() || tail.empty()) {
             return key;
         }
+        if (!apply_modifier_token(to_lower_ascii(head), key)) {
+            return key;
+        }
+        rest = tail;
     }
-    key.keysym = parts.back();
+
+    const auto final_key = trim(rest);
+    if (final_key.empty()) {
+        return key;
+    }
+    key.keysym = final_key;
     return key;
+}
+
+std::string hotkey_from_qt_sequence(std::string_view qt_portable) {
+    std::string_view first = qt_portable;
+    if (const auto comma = first.find(", "); comma != std::string_view::npos) {
+        first = first.substr(0, comma);
+    }
+    std::string body = trim(first);
+    if (body.empty()) {
+        return {};
+    }
+
+    Hotkey parsed;
+    parsed.keysym.clear();
+    std::string_view rest = body;
+    while (true) {
+        if (rest == "+") {
+            break;
+        }
+        const auto plus = rest.find('+');
+        if (plus == std::string_view::npos) {
+            break;
+        }
+        const auto head = trim(rest.substr(0, plus));
+        const auto tail = trim(rest.substr(plus + 1));
+        if (head.empty() || tail.empty()) {
+            return {};
+        }
+        if (!apply_modifier_token(to_lower_ascii(head), parsed)) {
+            return {};
+        }
+        rest = tail;
+    }
+
+    const auto final_key = trim(rest);
+    if (final_key.empty()) {
+        return {};
+    }
+
+    std::string out;
+    if (parsed.ctrl) {
+        out += "Ctrl+";
+    }
+    if (parsed.alt) {
+        out += "Alt+";
+    }
+    if (parsed.shift) {
+        out += "Shift+";
+    }
+    if (parsed.super) {
+        out += "Super+";
+    }
+    out += qt_key_to_x11(final_key);
+    return out;
+}
+
+std::string hotkey_to_qt_sequence(std::string_view config_hotkey) {
+    const Hotkey parsed = parse_hotkey(config_hotkey);
+    if (parsed.keysym.empty()) {
+        return {};
+    }
+    std::string out;
+    if (parsed.ctrl) {
+        out += "Ctrl+";
+    }
+    if (parsed.alt) {
+        out += "Alt+";
+    }
+    if (parsed.shift) {
+        out += "Shift+";
+    }
+    if (parsed.super) {
+        out += "Meta+";
+    }
+    out += x11_key_to_qt(parsed.keysym);
+    return out;
 }
 
 std::string default_user_config_path() {
@@ -193,6 +338,8 @@ Config load_config(const std::string& path, bool debug_keys) {
             cfg.dict_uk = expand_home(std::move(value));
         } else if (key == "exclude") {
             cfg.exclude = split_csv(value);
+        } else if (key == "ignore-words") {
+            cfg.ignore_words = split_csv(value);
         } else if (key == "pause-key") {
             if (!value.empty()) {
                 cfg.pause_key = std::move(value);
@@ -243,12 +390,35 @@ bool save_config_file(const Config &config, const std::string &path) {
         }
         out << config.exclude[i];
     }
-    out << '\n'
-        << "pause-key=" << config.pause_key << '\n'
+    out << '\n';
+    if (!config.ignore_words.empty()) {
+        out << "ignore-words=";
+        for (std::size_t i = 0; i < config.ignore_words.size(); ++i) {
+            if (i != 0) {
+                out << ',';
+            }
+            out << config.ignore_words[i];
+        }
+        out << '\n';
+    }
+    out << "pause-key=" << config.pause_key << '\n'
         << "undo-key=" << config.undo_key << '\n'
         << "convert-key=" << config.convert_key << '\n';
     out.flush();
     return out.good();
+}
+
+std::unordered_set<std::string> build_ignore_set(
+    const std::vector<std::string> &words) {
+    std::unordered_set<std::string> out;
+    out.reserve(words.size());
+    for (const auto &word : words) {
+        const auto cleaned = trim(word);
+        if (!cleaned.empty()) {
+            out.insert(utf8::casefold(cleaned));
+        }
+    }
+    return out;
 }
 
 }  // namespace layoutfix

@@ -165,11 +165,69 @@ Decision decide_context(const std::vector<std::string>& current_words,
                                                    : Decision::Keep;
 }
 
+bool is_ignored_word(std::string_view word,
+                     const std::unordered_set<std::string>& ignore_words) {
+    if (word.empty() || ignore_words.empty()) {
+        return false;
+    }
+    auto has = [&](std::string_view candidate) {
+        return !candidate.empty() &&
+               ignore_words.contains(utf8::casefold(candidate));
+    };
+    if (has(word)) {
+        return true;
+    }
+    {
+        std::string_view core = word;
+        while (!core.empty() && is_trailing_punct(core.back())) {
+            core.remove_suffix(1);
+        }
+        if (core.size() < word.size() && starts_with_word_char(core) &&
+            has(core)) {
+            return true;
+        }
+    }
+    {
+        std::string_view core = word;
+        while (!core.empty() && is_opening_punct(core.front())) {
+            core.remove_prefix(1);
+        }
+        if (core.size() < word.size() && ends_with_word_char(core) &&
+            has(core)) {
+            return true;
+        }
+    }
+    {
+        std::string_view inner = word;
+        while (!inner.empty() &&
+               (inner.back() == ',' || inner.back() == '.' ||
+                inner.back() == ';' || inner.back() == ':')) {
+            inner.remove_suffix(1);
+        }
+        bool unwrapped = false;
+        while (inner.size() >= 2 &&
+               matching_close(inner.front()) == inner.back()) {
+            inner.remove_prefix(1);
+            inner.remove_suffix(1);
+            unwrapped = true;
+        }
+        if (unwrapped && has(inner)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool is_ambiguous_word(
     const std::array<std::string, 3>& forms, Lang source_language,
-    const std::array<const Dictionary*, 3>& dictionaries) {
+    const std::array<const Dictionary*, 3>& dictionaries,
+    const std::unordered_set<std::string>* ignore_words) {
     const auto source_index = lang_index(source_language);
     if (source_index >= forms.size()) {
+        return false;
+    }
+    if (ignore_words != nullptr &&
+        is_ignored_word(forms[source_index], *ignore_words)) {
         return false;
     }
     if (dictionaries[source_index] != nullptr &&
@@ -193,7 +251,8 @@ bool is_ambiguous_word(
 std::optional<Lang> unique_language_candidate(
     const std::array<std::vector<std::string>, 3>& words_by_language,
     Lang source_language,
-    const std::array<const Dictionary*, 3>& dictionaries, int min_length) {
+    const std::array<const Dictionary*, 3>& dictionaries, int min_length,
+    const std::unordered_set<std::string>* ignore_words) {
     const auto source_index = lang_index(source_language);
     if (source_index >= words_by_language.size()) {
         return std::nullopt;
@@ -205,6 +264,13 @@ std::optional<Lang> unique_language_candidate(
     for (const auto& words : words_by_language) {
         if (words.size() != word_count) {
             return std::nullopt;
+        }
+    }
+    if (ignore_words != nullptr && !ignore_words->empty()) {
+        for (const auto& word : words_by_language[source_index]) {
+            if (is_ignored_word(word, *ignore_words)) {
+                return std::nullopt;
+            }
         }
     }
 
@@ -224,7 +290,8 @@ std::optional<Lang> unique_language_candidate(
             const std::array<std::string, 3> forms{
                 words_by_language[0][w], words_by_language[1][w],
                 words_by_language[2][w]};
-            if (is_ambiguous_word(forms, source_language, dictionaries)) {
+            if (is_ambiguous_word(forms, source_language, dictionaries,
+                                  ignore_words)) {
                 has_context_reason = true;
                 break;
             }

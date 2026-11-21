@@ -9,8 +9,9 @@
 #include <QFormLayout>
 #include <QFont>
 #include <QIcon>
+#include <QKeySequence>
+#include <QKeySequenceEdit>
 #include <QLabel>
-#include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
@@ -271,6 +272,7 @@ int App::run(Config config, bool check_only) {
   auto pause_key = parse_hotkey(config.pause_key);
   auto undo_key = parse_hotkey(config.undo_key);
   auto convert_key = parse_hotkey(config.convert_key);
+  auto ignore_set = build_ignore_set(config.ignore_words);
   unsigned pause_kc = hotkey_keycode(x11, pause_key);
   unsigned undo_kc = hotkey_keycode(x11, undo_key);
   unsigned convert_kc = hotkey_keycode(x11, convert_key);
@@ -495,24 +497,40 @@ int App::run(Config config, bool check_only) {
   QObject::connect(settings_action, &QAction::triggered, [&] {
     QDialog dialog;
     dialog.setWindowTitle(QStringLiteral("Налаштування layout-fix"));
-    dialog.setMinimumWidth(440);
+    dialog.setMinimumWidth(480);
     auto *form = new QFormLayout;
     auto *minimum_length = new QSpinBox;
     minimum_length->setRange(1, 24);
     minimum_length->setValue(config.min_length);
     form->addRow(QStringLiteral("Мінімальна довжина слова"), minimum_length);
 
-    auto *pause_hotkey = new QLineEdit(QString::fromStdString(config.pause_key));
-    pause_hotkey->setPlaceholderText(QStringLiteral("Pause або F8"));
+    auto make_hotkey_edit = [](const std::string &value) {
+      auto *edit = new QKeySequenceEdit;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+      edit->setMaximumSequenceLength(1);
+#endif
+#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+      edit->setClearButtonEnabled(true);
+#endif
+      edit->setKeySequence(QKeySequence::fromString(
+          QString::fromStdString(hotkey_to_qt_sequence(value)),
+          QKeySequence::PortableText));
+      QObject::connect(edit, &QKeySequenceEdit::keySequenceChanged, edit,
+                       [edit](const QKeySequence &seq) {
+                         if (seq.count() > 1) {
+                           edit->setKeySequence(QKeySequence(seq[0]));
+                         }
+                       });
+      return edit;
+    };
+
+    auto *pause_hotkey = make_hotkey_edit(config.pause_key);
     form->addRow(QStringLiteral("Пауза / продовжити"), pause_hotkey);
 
-    auto *undo_hotkey = new QLineEdit(QString::fromStdString(config.undo_key));
-    undo_hotkey->setPlaceholderText(QStringLiteral("Shift+Pause"));
+    auto *undo_hotkey = make_hotkey_edit(config.undo_key);
     form->addRow(QStringLiteral("Скасувати останнє виправлення"), undo_hotkey);
 
-    auto *convert_hotkey =
-        new QLineEdit(QString::fromStdString(config.convert_key));
-    convert_hotkey->setPlaceholderText(QStringLiteral("Alt+Pause"));
+    auto *convert_hotkey = make_hotkey_edit(config.convert_key);
     form->addRow(QStringLiteral("Виправити виділений текст"), convert_hotkey);
 
     auto *excluded_windows = new QPlainTextEdit;
@@ -523,8 +541,19 @@ int App::run(Config config, bool check_only) {
       excluded_lines.push_back(QString::fromStdString(name));
     }
     excluded_windows->setPlainText(excluded_lines.join('\n'));
-    excluded_windows->setMinimumHeight(120);
+    excluded_windows->setMinimumHeight(110);
     form->addRow(QStringLiteral("Не виправляти у вікнах"), excluded_windows);
+
+    auto *ignored_words_edit = new QPlainTextEdit;
+    ignored_words_edit->setPlaceholderText(
+        QStringLiteral("Одне слово на рядок (без урахування регістру)"));
+    QStringList ignored_lines;
+    for (const auto &word : config.ignore_words) {
+      ignored_lines.push_back(QString::fromStdString(word));
+    }
+    ignored_words_edit->setPlainText(ignored_lines.join('\n'));
+    ignored_words_edit->setMinimumHeight(80);
+    form->addRow(QStringLiteral("Не виправляти слова"), ignored_words_edit);
 
     auto *help = new QLabel(QStringLiteral(
         "Зміни збережуться у користувацький конфіг і застосуються одразу."));
@@ -556,10 +585,13 @@ int App::run(Config config, bool check_only) {
       return;
     }
 
-    const std::string new_pause_text = pause_hotkey->text().trimmed().toStdString();
-    const std::string new_undo_text = undo_hotkey->text().trimmed().toStdString();
-    const std::string new_convert_text =
-        convert_hotkey->text().trimmed().toStdString();
+    auto read_hotkey_edit = [](const QKeySequenceEdit *edit) {
+      return hotkey_from_qt_sequence(
+          edit->keySequence().toString(QKeySequence::PortableText).toStdString());
+    };
+    const std::string new_pause_text = read_hotkey_edit(pause_hotkey);
+    const std::string new_undo_text = read_hotkey_edit(undo_hotkey);
+    const std::string new_convert_text = read_hotkey_edit(convert_hotkey);
     const Hotkey new_pause = parse_hotkey(new_pause_text);
     const Hotkey new_undo = parse_hotkey(new_undo_text);
     const Hotkey new_convert = parse_hotkey(new_convert_text);
@@ -570,8 +602,11 @@ int App::run(Config config, bool check_only) {
         same_hotkey(new_pause, new_pause_kc, new_undo, new_undo_kc) ||
         same_hotkey(new_pause, new_pause_kc, new_convert, new_convert_kc) ||
         same_hotkey(new_undo, new_undo_kc, new_convert, new_convert_kc)) {
-      QMessageBox::warning(nullptr, QStringLiteral("Неправильні клавіші"),
-                           QStringLiteral("Вкажи три різні доступні клавіші."));
+      QMessageBox::warning(
+          nullptr, QStringLiteral("Неправильні клавіші"),
+          QStringLiteral(
+              "Вкажи три різні доступні клавіші (для літерних комбінацій "
+              "перемкнись на латиницю)."));
       listener.drain();
       listener.take();
       drain_ctrl();
@@ -588,6 +623,15 @@ int App::run(Config config, bool check_only) {
       const auto name = line.trimmed();
       if (!name.isEmpty()) {
         updated.exclude.push_back(name.toStdString());
+      }
+    }
+    updated.ignore_words.clear();
+    for (const auto &line : ignored_words_edit->toPlainText().split('\n')) {
+      for (const auto &part : line.split(',')) {
+        const auto word = part.trimmed();
+        if (!word.isEmpty()) {
+          updated.ignore_words.push_back(word.toStdString());
+        }
       }
     }
     const std::string save_path = config.config_path_explicit
@@ -610,6 +654,7 @@ int App::run(Config config, bool check_only) {
     pause_kc = new_pause_kc;
     undo_kc = new_undo_kc;
     convert_kc = new_convert_kc;
+    ignore_set = build_ignore_set(config.ignore_words);
     rebuild_hotkey_modifier_keys();
     log::info("налаштування збережено й застосовано");
   });
@@ -911,6 +956,13 @@ int App::run(Config config, bool check_only) {
             }
           };
 
+          std::string primary_text;
+          const bool copy_line_editor =
+              is_copy_line_editor(focus.wm_class(), focus.wm_name());
+          if (copy_line_editor) {
+            clipboard.read_primary(80, primary_text);
+          }
+
           std::vector<EchoKey> echoes;
           const bool sentinel_ok = clipboard.claim_sentinel();
           retype.send_ctrl_c(echoes);
@@ -920,6 +972,20 @@ int App::run(Config config, bool check_only) {
           std::string selected;
           if (copied && clipboard.read(kClipboardTimeoutMs, selected) &&
               !selected.empty()) {
+            std::string web_custom_data;
+            if (copy_line_editor || selected.back() == '\n') {
+              clipboard.read_custom_target("chromium/x-web-custom-data", 80,
+                                           web_custom_data);
+            }
+            if (looks_like_empty_line_copy(selected, primary_text,
+                                           copy_line_editor,
+                                           web_custom_data)) {
+              restore_saved_now();
+              log::info("пропущено порожнє виділення в редакторі");
+              x11.flush_ctrl();
+              begin_inject(std::move(echoes));
+              continue;
+            }
             const Lang current_lang =
                 groups.language_of(groups.current_group());
             const auto converted = convert_selection(
@@ -1059,7 +1125,8 @@ int App::run(Config config, bool check_only) {
                 buffer.text(candidate));
           }
           const auto candidate_target = unique_language_candidate(
-              words_by_language, lang, active_dictionaries, config.min_length);
+              words_by_language, lang, active_dictionaries, config.min_length,
+              &ignore_set);
           if (candidate_target.has_value()) {
             target = candidate_target;
             matched_start = start;
@@ -1172,12 +1239,15 @@ int App::run(Config config, bool check_only) {
         last_word.valid = false;
       }
       const auto& current_word = buffer.text(lang);
+      const bool ignored =
+          buffer.has_word() && is_ignored_word(current_word, ignore_set);
       const bool is_short = utf8::char_count(current_word) <
                             static_cast<std::size_t>(config.min_length);
       const bool is_ambiguous =
           buffer.has_word() &&
-          is_ambiguous_word(current_word_forms, lang, active_dictionaries);
-      if (whitespace_boundary && buffer.has_word() &&
+          is_ambiguous_word(current_word_forms, lang, active_dictionaries,
+                            &ignore_set);
+      if (whitespace_boundary && buffer.has_word() && !ignored &&
           (is_short || is_ambiguous)) {
         pending_short.push_back(
             PendingWord{std::move(current_word_forms), buffer.strokes()});

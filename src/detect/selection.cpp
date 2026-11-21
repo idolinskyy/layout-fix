@@ -2,6 +2,7 @@
 
 #include "utf8.hpp"
 
+#include <cctype>
 #include <cstddef>
 #include <vector>
 
@@ -255,6 +256,111 @@ SelectionResult convert_selection(
     }
 
     return SelectionResult{best->mapped, best->target, true};
+}
+
+namespace {
+
+bool contains_ci_ascii(std::string_view haystack, std::string_view needle) {
+    if (needle.empty() || haystack.size() < needle.size()) {
+        return false;
+    }
+    auto lower = [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    };
+    for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+        bool match = true;
+        for (std::size_t j = 0; j < needle.size(); ++j) {
+            if (lower(static_cast<unsigned char>(haystack[i + j])) !=
+                lower(static_cast<unsigned char>(needle[j]))) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool contains_utf16le_ascii(std::string_view data, std::string_view ascii) {
+    if (ascii.empty() || data.size() < ascii.size() * 2) {
+        return false;
+    }
+    const std::size_t span = ascii.size() * 2;
+    for (std::size_t i = 0; i + span <= data.size(); ++i) {
+        bool match = true;
+        for (std::size_t j = 0; j < ascii.size(); ++j) {
+            if (data[i + j * 2] != ascii[j] || data[i + j * 2 + 1] != '\0') {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_single_line_with_trailing_newline(std::string_view text) {
+    if (text.empty() || text.back() != '\n') {
+        return false;
+    }
+    std::string_view body = text.substr(0, text.size() - 1);
+    if (!body.empty() && body.back() == '\r') {
+        body.remove_suffix(1);
+    }
+    return body.find('\n') == std::string_view::npos;
+}
+
+}  // namespace
+
+bool is_copy_line_editor(std::string_view wm_class, std::string_view wm_name) {
+    static constexpr std::string_view kEditors[] = {
+        "code",         "vscodium",  "antigravity", "cursor",
+        "windsurf",     "sublime",   "subl",        "jetbrains",
+        "idea",         "clion",     "pycharm",     "webstorm",
+        "goland",       "phpstorm",  "rider",       "rubymine",
+        "datagrip",     "kate",      "kwrite",
+    };
+    for (const auto editor : kEditors) {
+        if (contains_ci_ascii(wm_class, editor) ||
+            contains_ci_ascii(wm_name, editor)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool has_vscode_empty_selection_marker(std::string_view raw_custom_data) {
+    if (raw_custom_data.empty()) {
+        return false;
+    }
+    static constexpr std::string_view kMarkers[] = {
+        "\"isFromEmptySelection\":true",
+        "\"isFromEmptySelection\": true",
+    };
+    for (const auto marker : kMarkers) {
+        if (raw_custom_data.find(marker) != std::string_view::npos ||
+            contains_utf16le_ascii(raw_custom_data, marker)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool looks_like_empty_line_copy(std::string_view selected,
+                                std::string_view primary, bool copy_line_editor,
+                                std::string_view web_custom_data) {
+    if (has_vscode_empty_selection_marker(web_custom_data)) {
+        return true;
+    }
+    if (copy_line_editor && is_single_line_with_trailing_newline(selected) &&
+        primary != selected) {
+        return true;
+    }
+    return false;
 }
 
 }  // namespace layoutfix
