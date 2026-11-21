@@ -43,4 +43,23 @@ void WordBuffer::pop() {
     }
 }
 
+std::string build_replacement_text(const std::vector<Stroke>& strokes,
+                                   Lang target) {
+    std::string out;
+    if (target == Lang::Other) {
+        return out;
+    }
+    const std::size_t idx = lang_index(target);
+    for (const auto& stroke : strokes) {
+        if (stroke.word) {
+            out += stroke.forms[idx];
+        } else if (stroke.current == "\r") {
+            out += '\n';
+        } else {
+            out += stroke.current;
+        }
+    }
+    return out;
+}
+
 }  // namespace layoutfix

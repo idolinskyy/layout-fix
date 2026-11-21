@@ -165,6 +165,31 @@ Decision decide_context(const std::vector<std::string>& current_words,
                                                    : Decision::Keep;
 }
 
+bool is_ambiguous_word(
+    const std::array<std::string, 3>& forms, Lang source_language,
+    const std::array<const Dictionary*, 3>& dictionaries) {
+    const auto source_index = lang_index(source_language);
+    if (source_index >= forms.size()) {
+        return false;
+    }
+    if (dictionaries[source_index] != nullptr &&
+        word_accepted_by(forms[source_index], *dictionaries[source_index], true,
+                         1)) {
+        return false;
+    }
+    int other_matches = 0;
+    for (std::size_t language = 0; language < dictionaries.size(); ++language) {
+        if (language == source_index || dictionaries[language] == nullptr) {
+            continue;
+        }
+        if (word_accepted_by(forms[language], *dictionaries[language], false,
+                             1)) {
+            ++other_matches;
+        }
+    }
+    return other_matches >= 2;
+}
+
 std::optional<Lang> unique_language_candidate(
     const std::array<std::vector<std::string>, 3>& words_by_language,
     Lang source_language,
@@ -174,7 +199,7 @@ std::optional<Lang> unique_language_candidate(
         return std::nullopt;
     }
     const auto word_count = words_by_language[source_index].size();
-    if (word_count == 0 || word_count > 3) {
+    if (word_count == 0 || word_count > 4) {
         return std::nullopt;
     }
     for (const auto& words : words_by_language) {
@@ -189,13 +214,22 @@ std::optional<Lang> unique_language_candidate(
             return std::nullopt;
         }
     } else {
-        bool has_short_word = false;
-        for (const auto& word : words_by_language[source_index]) {
-            has_short_word = has_short_word ||
-                             utf8::char_count(word) <
-                                 static_cast<std::size_t>(min_length);
+        bool has_context_reason = false;
+        for (std::size_t w = 0; w < word_count; ++w) {
+            if (utf8::char_count(words_by_language[source_index][w]) <
+                static_cast<std::size_t>(min_length)) {
+                has_context_reason = true;
+                break;
+            }
+            const std::array<std::string, 3> forms{
+                words_by_language[0][w], words_by_language[1][w],
+                words_by_language[2][w]};
+            if (is_ambiguous_word(forms, source_language, dictionaries)) {
+                has_context_reason = true;
+                break;
+            }
         }
-        if (!has_short_word) {
+        if (!has_context_reason) {
             return std::nullopt;
         }
     }
@@ -229,6 +263,80 @@ std::optional<Lang> unique_language_candidate(
         return std::nullopt;
     }
     return match;
+}
+
+std::optional<Lang> choose_forced_language(
+    const std::array<std::string, 3>& forms, Lang source_language,
+    const std::array<const Dictionary*, 3>& dictionaries,
+    const std::array<bool, 3>& active_languages,
+    const std::array<bool, 3>& visited_languages) {
+    const auto source_index = lang_index(source_language);
+    if (source_index >= forms.size()) {
+        return std::nullopt;
+    }
+
+    auto is_cyrillic_lang = [](Lang lang) {
+        return lang == Lang::Uk || lang == Lang::Ru;
+    };
+
+    auto pick = [&](bool respect_visited, bool use_dictionaries) -> std::optional<Lang> {
+        std::vector<Lang> pool;
+        for (const Lang candidate : kSupportedLanguages) {
+            const auto idx = lang_index(candidate);
+            if (candidate == source_language || !active_languages[idx] ||
+                forms[idx].empty()) {
+                continue;
+            }
+            if (respect_visited && visited_languages[idx]) {
+                continue;
+            }
+            pool.push_back(candidate);
+        }
+        if (pool.empty()) {
+            return std::nullopt;
+        }
+
+        std::vector<Lang> dict_hits;
+        if (use_dictionaries) {
+            for (const Lang candidate : pool) {
+                const auto idx = lang_index(candidate);
+                if (dictionaries[idx] != nullptr &&
+                    word_accepted_by(forms[idx], *dictionaries[idx], false, 1)) {
+                    dict_hits.push_back(candidate);
+                }
+            }
+        }
+        const auto& finalists = dict_hits.empty() ? pool : dict_hits;
+
+        auto rank = [&](Lang candidate) -> int {
+            int score = 0;
+            if (is_cyrillic_lang(candidate) !=
+                is_cyrillic_lang(source_language)) {
+                score += 100;
+            }
+            if (candidate == Lang::Uk) {
+                score += 10;
+            } else if (candidate == Lang::En) {
+                score += 5;
+            }
+            return score;
+        };
+
+        Lang best = finalists[0];
+        for (std::size_t i = 1; i < finalists.size(); ++i) {
+            if (rank(finalists[i]) > rank(best)) {
+                best = finalists[i];
+            }
+        }
+        return best;
+    };
+
+    if (const auto next = pick(true, true); next.has_value()) {
+        return next;
+    }
+    // Після обходу всіх активних мов повертаємося по колу без словникового зсуву,
+    // щоб не застрягнути між Uk і Ru при невідомому в En слові.
+    return pick(false, false);
 }
 
 }  // namespace layoutfix

@@ -42,4 +42,9 @@ private:
     int group_ = -1;
 };
 
+// Збирає готовий UTF-8 рядок для цільової мови з послідовності Stroke
+// (для атомарної вставки багатослівного виправлення через буфер обміну).
+std::string build_replacement_text(const std::vector<Stroke>& strokes,
+                                   Lang target);
+
 }  // namespace layoutfix

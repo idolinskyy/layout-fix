@@ -202,6 +202,79 @@ int main() {
             {{{"..."}, {"ююю"}, {"ююю"}}}, layoutfix::Lang::En, punct_dicts,
             3));
 
+  // Ambiguous Uk+Ru word followed by a uniquely Uk or Ru word (2B, up to 4 words).
+  layoutfix::Dictionary amb_en;
+  layoutfix::Dictionary amb_uk;
+  layoutfix::Dictionary amb_ru;
+  CHECK(amb_en.load_text("2\nhello\nmy\n"));
+  CHECK(amb_uk.load_text("6\nДля\nпросто\nтекст\nвиділеного\nпривіт\n"));
+  CHECK(amb_ru.load_text("5\nДля\nпросто\nтекст\nпримера\nпривет\n"));
+  const std::array<const layoutfix::Dictionary *, 3> amb_dicts{
+      &amb_en, &amb_uk, &amb_ru};
+  CHECK(layoutfix::is_ambiguous_word({"Lkz", "Для", "Для"}, layoutfix::Lang::En,
+                                     amb_dicts));
+  CHECK(!layoutfix::is_ambiguous_word({"hello", "руддщ", "руддщ"},
+                                      layoutfix::Lang::En, amb_dicts));
+  // Single ambiguous word stays unswitched.
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"Lkz"}, {"Для"}, {"Для"}}}, layoutfix::Lang::En, amb_dicts, 3));
+  // "Lkz dblsktyjuj" -> Uk ("Для виділеного").
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"Lkz", "dblsktyjuj"},
+              {"Для", "виділеного"},
+              {"Для", "выдыленого"}}},
+            layoutfix::Lang::En, amb_dicts, 3) == layoutfix::Lang::Uk);
+  // "Lkz ghbvthf" -> Ru ("Для примера").
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"Lkz", "ghbvthf"}, {"Для", "примера"}, {"Для", "примера"}}},
+            layoutfix::Lang::En, amb_dicts, 3) == layoutfix::Lang::Ru);
+  // 4-word context: 3 shared Uk+Ru words + 1 unique Uk word.
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"Lkz", "ghjcnj", "ntrcn", "ghbdsn"},
+              {"Для", "просто", "текст", "привіт"},
+              {"Для", "просто", "текст", "привыт"}}},
+            layoutfix::Lang::En, amb_dicts, 3) == layoutfix::Lang::Uk);
+  // Ambiguous word followed by valid English word must NOT switch.
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"Lkz", "hello"}, {"Для", "руддщ"}, {"Для", "руддщ"}}},
+            layoutfix::Lang::En, amb_dicts, 3));
+
+  // Force-convert last word (short, proper noun, ambiguous, and language cycling).
+  const std::array<bool, 3> force_all{true, true, true};
+  const std::array<bool, 3> force_en_uk{true, true, false};
+  // Dictionary picks unique Russian match ("ghbdtn" -> "привет").
+  CHECK(layoutfix::choose_forced_language(
+            {"ghbdtn", "привет", "привет"}, layoutfix::Lang::En,
+            {&english, &ukrainian, &russian}, force_all,
+            {true, false, false}) == layoutfix::Lang::Ru);
+  // Short word ("oj" -> "що" in Uk, not in Ru).
+  CHECK(layoutfix::choose_forced_language(
+            {"oj", "що", "що"}, layoutfix::Lang::En,
+            {&english, &ukrainian, &russian}, force_all,
+            {true, false, false}) == layoutfix::Lang::Uk);
+  // Unknown proper noun ("Bujhm" -> "Ігорь") toggles En <-> Uk with 2 languages.
+  CHECK(layoutfix::choose_forced_language(
+            {"Bujhm", "Ігорь", "Ыгорь"}, layoutfix::Lang::En,
+            {&english, &ukrainian, nullptr}, force_en_uk,
+            {true, false, false}) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::choose_forced_language(
+            {"Bujhm", "Ігорь", "Ыгорь"}, layoutfix::Lang::Uk,
+            {&english, &ukrainian, nullptr}, force_en_uk,
+            {true, true, false}) == layoutfix::Lang::En);
+  // Ambiguous word valid in both Uk and Ru cycles En -> Uk -> Ru -> En.
+  CHECK(layoutfix::choose_forced_language(
+            {"ye", "ну", "ну"}, layoutfix::Lang::En,
+            {&english, &ukrainian, &russian}, force_all,
+            {true, false, false}) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::choose_forced_language(
+            {"ye", "ну", "ну"}, layoutfix::Lang::Uk,
+            {&english, &ukrainian, &russian}, force_all,
+            {true, true, false}) == layoutfix::Lang::Ru);
+  CHECK(layoutfix::choose_forced_language(
+            {"ye", "ну", "ну"}, layoutfix::Lang::Ru,
+            {&english, &ukrainian, &russian}, force_all,
+            {true, true, true}) == layoutfix::Lang::En);
+
   layoutfix::WordBuffer buffer;
   buffer.set_group(0);
   buffer.push_word(42, false, layoutfix::Lang::En, {"g", "п", "г"});
@@ -215,6 +288,27 @@ int main() {
   buffer.push_boundary(65, false, " ");
   CHECK(buffer.strokes().size() == 2);
   CHECK(!buffer.strokes().back().word);
+
+  // build_replacement_text for atomic multi-word clipboard paste.
+  layoutfix::WordBuffer multi_w1;
+  multi_w1.set_group(0);
+  multi_w1.push_word(46, true, layoutfix::Lang::En, {"L", "Д", "Д"});
+  multi_w1.push_word(45, false, layoutfix::Lang::En, {"k", "л", "л"});
+  multi_w1.push_word(52, false, layoutfix::Lang::En, {"z", "я", "я"});
+  multi_w1.push_boundary(65, false, " ");
+  layoutfix::WordBuffer multi_w2;
+  multi_w2.set_group(0);
+  multi_w2.push_word(42, false, layoutfix::Lang::En, {"g", "п", "п"});
+  multi_w2.push_word(43, false, layoutfix::Lang::En, {"h", "р", "р"});
+  multi_w2.push_word(56, false, layoutfix::Lang::En, {"b", "и", "и"});
+  multi_w2.push_boundary(36, false, "\r");
+  std::vector<layoutfix::Stroke> multi_strokes = multi_w1.strokes();
+  multi_strokes.insert(multi_strokes.end(), multi_w2.strokes().begin(),
+                       multi_w2.strokes().end());
+  CHECK(layoutfix::build_replacement_text(multi_strokes, layoutfix::Lang::Ru) ==
+        "Для при\n");
+  CHECK(layoutfix::build_replacement_text(multi_strokes, layoutfix::Lang::En) ==
+        "Lkz ghb\n");
 
   std::vector<layoutfix::EchoKey> echoes{
       {22, true}, {22, false}, {38, true}, {38, false}};

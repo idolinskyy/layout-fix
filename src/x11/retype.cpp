@@ -83,10 +83,12 @@ void Retype::replace(int delete_count, const std::vector<Stroke>& strokes,
     char map[32] = {};
     XQueryKeymap(dpy, map);
 
-    // Відпускаємо затиснутий Shift (лівий і правий) з optional-echo, щоб
-    // уникнути зависання черги відлуння, якщо користувач відпустив клавішу сам.
-    release_if_down(shift_r_, map, echoes);
-    release_if_down(shift_, map, echoes);
+    // Відпускаємо всі затиснуті модифікатори (Shift/Ctrl/Alt/Super) з optional-echo,
+    // щоб вони не спотворювали BackSpace/літери (напр. при Alt+Pause або Shift+Pause)
+    // і не вішали чергу відлуння, якщо користувач відпустив клавішу сам.
+    for (unsigned mod_kc : modifiers_) {
+        release_if_down(mod_kc, map, echoes);
+    }
     shift_down_ = false;
 
     if (delete_count > 0) {
