@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(VERSION 0.2.0 CACHE STRING "layout-fix package version")
+set(VERSION 0.3.0 CACHE STRING "layout-fix package version")
 project(layout-fix VERSION ${VERSION} LANGUAGES CXX)
 
 include(GNUInstallDirs)
@@ -76,7 +76,8 @@ add_executable(layout-fix
   src/layout/cinnamon.cpp
   src/detect/dictionary.cpp
   src/detect/detector.cpp
-  src/detect/selection.cpp)
+  src/detect/selection.cpp
+  src/ui/tray.cpp)
 
 configure_file(data/layout-fix.desktop.in
   ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.desktop @ONLY)
@@ -119,8 +120,28 @@ add_executable(layout-fix-test
 target_include_directories(layout-fix-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(layout-fix-test PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(layout-fix-x11-test
+  tests/test_x11.cpp
+  src/log.cpp
+  src/utf8.cpp
+  src/x11/connection.cpp
+  src/x11/listener.cpp
+  src/x11/focus.cpp
+  src/x11/clipboard.cpp
+  src/x11/retype.cpp
+  src/input/word_buffer.cpp
+  src/layout/groups.cpp
+  src/detect/dictionary.cpp
+  src/detect/selection.cpp)
+target_include_directories(layout-fix-x11-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(layout-fix-x11-test PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(layout-fix-x11-test PRIVATE
+  X11::X11
+  ${X11_Xtst_LIB}
+  PkgConfig::XKBCOMMON)
+
 if(HUNSPELL_FOUND)
-  foreach(target layout-fix layout-fix-test)
+  foreach(target layout-fix layout-fix-test layout-fix-x11-test)
     target_compile_definitions(${target} PRIVATE LAYOUT_FIX_HAVE_HUNSPELL=1)
     target_link_libraries(${target} PRIVATE PkgConfig::HUNSPELL)
   endforeach()
@@ -131,6 +152,18 @@ endif()
 
 enable_testing()
 add_test(NAME core COMMAND layout-fix-test)
+
+option(LAYOUT_FIX_ENABLE_X11_TEST "Register isolated Xvfb X11 integration test in CTest" ON)
+find_program(XVFB_RUN_EXECUTABLE xvfb-run)
+find_program(SETXKBMAP_EXECUTABLE setxkbmap)
+if(LAYOUT_FIX_ENABLE_X11_TEST AND XVFB_RUN_EXECUTABLE AND SETXKBMAP_EXECUTABLE)
+  add_test(NAME x11_isolated
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-x11-test.sh
+            $<TARGET_FILE:layout-fix-x11-test>)
+  message(STATUS "Isolated Xvfb X11 integration test enabled")
+else()
+  message(STATUS "xvfb-run or setxkbmap not found; x11_isolated test skipped")
+endif()
 
 install(TARGETS layout-fix RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/layout-fix-launcher

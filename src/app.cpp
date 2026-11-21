@@ -1,29 +1,3 @@
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
-#include <QApplication>
-#include <QAction>
-#include <QColor>
-#include <QCoreApplication>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QEventLoop>
-#include <QFormLayout>
-#include <QFont>
-#include <QHBoxLayout>
-#include <QIcon>
-#include <QKeySequence>
-#include <QKeySequenceEdit>
-#include <QLabel>
-#include <QMenu>
-#include <QMessageBox>
-#include <QPainter>
-#include <QPlainTextEdit>
-#include <QPixmap>
-#include <QPushButton>
-#include <QSpinBox>
-#include <QSystemTrayIcon>
-#include <QVBoxLayout>
-#endif
-
 #include "app.hpp"
 
 #include "detect/detector.hpp"
@@ -37,6 +11,7 @@
 #include "log.hpp"
 #include "timing.hpp"
 #include "tray_state.hpp"
+#include "ui/tray.hpp"
 #include "utf8.hpp"
 #include "x11/clipboard.hpp"
 #include "x11/connection.hpp"
@@ -51,6 +26,7 @@
 #include <array>
 #include <chrono>
 #include <csignal>
+#include <memory>
 #include <poll.h>
 #include <string>
 #include <vector>
@@ -106,33 +82,6 @@ const char *cinnamon_source_id(Lang language) {
   return "";
 }
 
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
-QIcon layout_icon(Lang language, TrayMode mode) {
-  QPixmap pixmap(32, 32);
-  pixmap.fill(Qt::transparent);
-  QPainter painter(&pixmap);
-  painter.setRenderHint(QPainter::Antialiasing);
-  painter.setPen(Qt::NoPen);
-  const QColor active_color("#378b57");
-  const QColor desynced_color("#c97a16");
-  const int gray = qGray(active_color.rgb());
-  const QColor bg =
-      (mode == TrayMode::Paused || mode == TrayMode::PausedDesynced)
-          ? QColor(gray, gray, gray)
-          : (mode == TrayMode::Desynced ? desynced_color : active_color);
-  painter.setBrush(bg);
-  painter.drawEllipse(2, 2, 28, 28);
-  painter.setPen(Qt::white);
-  painter.setFont(QFont("Sans", 10, QFont::DemiBold));
-  const char *code = language == Lang::En ? "en"
-                     : language == Lang::Uk ? "uk"
-                     : language == Lang::Ru ? "ru"
-                                            : "--";
-  painter.drawText(pixmap.rect(), Qt::AlignCenter, QString::fromLatin1(code));
-  return QIcon(pixmap);
-}
-#endif
-
 unsigned keycode_of(XConnection &x11, KeySym sym) {
   return sym == NoSymbol ? 0 : XKeysymToKeycode(x11.ctrl(), sym);
 }
@@ -144,13 +93,11 @@ unsigned hotkey_keycode(XConnection &x11, const Hotkey &hotkey) {
   return keycode_of(x11, XStringToKeysym(hotkey.keysym.c_str()));
 }
 
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
 bool same_hotkey(const Hotkey &a, unsigned a_kc, const Hotkey &b,
                  unsigned b_kc) {
   return a_kc == b_kc && a.shift == b.shift && a.ctrl == b.ctrl &&
          a.alt == b.alt && a.super == b.super;
 }
-#endif
 
 bool hotkey_matches(const Hotkey &hotkey, unsigned hk_kc, unsigned break_kc,
                     unsigned event_kc, unsigned state) {
@@ -387,44 +334,19 @@ int App::run(Config config, bool check_only) {
   auto map_retry_at = std::chrono::steady_clock::now() +
                       std::chrono::milliseconds(250);
 
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
-  int qt_argc = 1;
-  char qt_name[] = "layout-fix";
-  char *qt_argv[] = {qt_name, nullptr};
-  QApplication qt_app(qt_argc, qt_argv);
-  qt_app.setQuitOnLastWindowClosed(false);
-  QApplication::setApplicationName(QStringLiteral("layout-fix"));
-  QApplication::setApplicationVersion(QStringLiteral(LAYOUT_FIX_VERSION));
-  QSystemTrayIcon tray;
-  QMenu tray_menu;
-  QAction *status_action = tray_menu.addAction("Стан: запускаю…");
-  status_action->setEnabled(false);
-  tray_menu.addSeparator();
-  QAction *pause_action = tray_menu.addAction("Пауза");
-  QMenu *language_menu = tray_menu.addMenu("Перемкнути розкладку");
-  std::vector<std::pair<Lang, QAction *>> language_actions;
-  QAction *settings_action = tray_menu.addAction("Налаштування…");
-  QAction *about_action = tray_menu.addAction("Про layout-fix");
-  tray_menu.addSeparator();
-  QAction *quit_action = tray_menu.addAction("Вийти");
-  tray.setContextMenu(&tray_menu);
-
-  auto language_label = [](Lang language) {
-    switch (language) {
-    case Lang::En:
-      return QStringLiteral("English (US)");
-    case Lang::Uk:
-      return QStringLiteral("Українська");
-    case Lang::Ru:
-      return QStringLiteral("Русский");
-    case Lang::Other:
-      return QStringLiteral("невідома");
+  bool saved_modal_paused = false;
+  std::unique_ptr<Tray> tray;
+  auto update_tray = [&](bool force = false) {
+    if (tray) {
+      tray->update(groups.language_of(groups.current_group()),
+                   choose_tray_mode(paused, maps_ready), paused, force);
     }
-    return QStringLiteral("невідома");
   };
   auto rebuild_language_menu = [&] {
-    language_menu->clear();
-    language_actions.clear();
+    if (!tray) {
+      return;
+    }
+    std::vector<TrayLanguageOption> options;
     for (const auto &source : cinnamon.sources()) {
       Lang language = Lang::Other;
       if (source.id == "us") {
@@ -437,296 +359,76 @@ int App::run(Config config, bool check_only) {
       if (language == Lang::Other || groups.group_for(language) < 0) {
         continue;
       }
-      QAction *action = language_menu->addAction(language_label(language));
-      action->setCheckable(true);
-      language_actions.emplace_back(language, action);
-      QObject::connect(action, &QAction::triggered,
-                       [&, index = source.index] {
-                         clear_input();
-                         undo.valid = false;
-                         cinnamon.activate(index);
-                       });
+      options.push_back(TrayLanguageOption{language, source.index});
     }
+    tray->set_languages(options);
   };
-  bool has_tray_state = false;
-  Lang last_tray_lang = Lang::Other;
-  TrayMode last_tray_mode = TrayMode::Active;
-  auto update_tray = [&](bool force = false) {
-    const Lang active_language = groups.language_of(groups.current_group());
-    const TrayMode mode = choose_tray_mode(paused, maps_ready);
-    if (!force && has_tray_state && active_language == last_tray_lang &&
-        mode == last_tray_mode) {
-      if (!tray.isVisible() && QSystemTrayIcon::isSystemTrayAvailable()) {
-        tray.show();
-      }
-      return;
-    }
-    has_tray_state = true;
-    last_tray_lang = active_language;
-    last_tray_mode = mode;
 
-    QString state_text;
-    QString tooltip_state;
-    switch (mode) {
-    case TrayMode::Active:
-      state_text = QStringLiteral("працює");
-      tooltip_state = QStringLiteral("працює");
-      break;
-    case TrayMode::Paused:
-      state_text = QStringLiteral("пауза");
-      tooltip_state = QStringLiteral("пауза");
-      break;
-    case TrayMode::Desynced:
-      state_text = QStringLiteral("XKB/Cinnamon не узгоджені");
-      tooltip_state = QStringLiteral(
-          "XKB і Cinnamon не узгоджені (виправлення призупинено)");
-      break;
-    case TrayMode::PausedDesynced:
-      state_text = QStringLiteral("пауза (XKB/Cinnamon не узгоджені)");
-      tooltip_state = QStringLiteral("пауза · XKB і Cinnamon не узгоджені");
-      break;
-    }
-    status_action->setText(
-        QStringLiteral("Стан: %1 · мова: %2")
-            .arg(state_text, language_label(active_language)));
-    pause_action->setText(paused ? "Відновити" : "Пауза");
-    for (const auto &[language, action] : language_actions) {
-      action->setChecked(language == active_language);
-    }
-    tray.setIcon(layout_icon(active_language, mode));
-    tray.setToolTip(QStringLiteral("layout-fix · %1 · %2")
-                        .arg(tooltip_state, language_label(active_language)));
-    if (!tray.isVisible() && QSystemTrayIcon::isSystemTrayAvailable()) {
-      tray.show();
-    }
-  };
-  rebuild_language_menu();
-  update_tray(true);
-  if (!QSystemTrayIcon::isSystemTrayAvailable()) {
-    log::error("системний трей недоступний; керування лишається на клавіатурі");
-  }
-  QObject::connect(pause_action, &QAction::triggered, [&] {
+  TrayCallbacks tray_callbacks;
+  tray_callbacks.on_toggle_pause = [&] {
     paused = !paused;
     clear_input();
     undo.valid = false;
     log::info(paused ? "пауза" : "знову слухаю");
     update_tray();
-  });
-  QObject::connect(settings_action, &QAction::triggered, [&] {
-    drain_ctrl();
-    track_last_window();
-
-    QDialog dialog;
-    dialog.setWindowTitle(QStringLiteral("Налаштування layout-fix"));
-    dialog.setMinimumWidth(480);
-    auto *form = new QFormLayout;
-    auto *minimum_length = new QSpinBox;
-    minimum_length->setRange(1, 24);
-    minimum_length->setValue(config.min_length);
-    form->addRow(QStringLiteral("Мінімальна довжина слова"), minimum_length);
-
-    auto make_hotkey_edit = [](const std::string &value) {
-      auto *edit = new QKeySequenceEdit;
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-      edit->setMaximumSequenceLength(1);
-#endif
-#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
-      edit->setClearButtonEnabled(true);
-#endif
-      edit->setKeySequence(QKeySequence::fromString(
-          QString::fromStdString(hotkey_to_qt_sequence(value)),
-          QKeySequence::PortableText));
-      QObject::connect(edit, &QKeySequenceEdit::keySequenceChanged, edit,
-                       [edit](const QKeySequence &seq) {
-                         if (seq.count() > 1) {
-                           edit->setKeySequence(QKeySequence(seq[0]));
-                         }
-                       });
-      return edit;
-    };
-
-    auto *pause_hotkey = make_hotkey_edit(config.pause_key);
-    form->addRow(QStringLiteral("Пауза / продовжити"), pause_hotkey);
-
-    auto *undo_hotkey = make_hotkey_edit(config.undo_key);
-    form->addRow(QStringLiteral("Скасувати останнє виправлення"), undo_hotkey);
-
-    auto *convert_hotkey = make_hotkey_edit(config.convert_key);
-    form->addRow(QStringLiteral("Виправити виділений текст"), convert_hotkey);
-
-    auto *excluded_windows = new QPlainTextEdit;
-    excluded_windows->setPlaceholderText(
-        QStringLiteral("Одна частина WM_CLASS на рядок"));
-    QStringList excluded_lines;
-    for (const auto &name : config.exclude) {
-      excluded_lines.push_back(QString::fromStdString(name));
-    }
-    excluded_windows->setPlainText(excluded_lines.join('\n'));
-    excluded_windows->setMinimumHeight(110);
-    auto *exclude_box = new QVBoxLayout;
-    exclude_box->setContentsMargins(0, 0, 0, 0);
-    exclude_box->addWidget(excluded_windows);
-    auto *last_window_row = new QHBoxLayout;
-    last_window_row->setContentsMargins(0, 0, 0, 0);
-    const QString last_wm = QString::fromStdString(last_app_wm_class);
-    auto *last_window_label = new QLabel(
-        last_wm.isEmpty()
-            ? QStringLiteral("Останнє вікно: невідоме")
-            : QStringLiteral("Останнє вікно: %1").arg(last_wm));
-    auto *add_last_window = new QPushButton(QStringLiteral("Додати"));
-    add_last_window->setEnabled(!last_wm.isEmpty());
-    QObject::connect(add_last_window, &QPushButton::clicked, [&] {
-      if (last_wm.isEmpty()) {
-        return;
-      }
-      QStringList lines = excluded_windows->toPlainText().split('\n');
-      for (const auto &line : lines) {
-        if (line.trimmed().compare(last_wm, Qt::CaseInsensitive) == 0) {
-          return;
-        }
-      }
-      QString text = excluded_windows->toPlainText();
-      if (!text.isEmpty() && !text.endsWith('\n')) {
-        text += '\n';
-      }
-      text += last_wm;
-      excluded_windows->setPlainText(text);
-    });
-    last_window_row->addWidget(last_window_label, 1);
-    last_window_row->addWidget(add_last_window);
-    exclude_box->addLayout(last_window_row);
-    form->addRow(QStringLiteral("Не виправляти у вікнах"), exclude_box);
-
-    auto *ignored_words_edit = new QPlainTextEdit;
-    ignored_words_edit->setPlaceholderText(
-        QStringLiteral("Одне слово на рядок (без урахування регістру)"));
-    QStringList ignored_lines;
-    for (const auto &word : config.ignore_words) {
-      ignored_lines.push_back(QString::fromStdString(word));
-    }
-    ignored_words_edit->setPlainText(ignored_lines.join('\n'));
-    ignored_words_edit->setMinimumHeight(80);
-    form->addRow(QStringLiteral("Не виправляти слова"), ignored_words_edit);
-
-    auto *help = new QLabel(QStringLiteral(
-        "Зміни збережуться у користувацький конфіг і застосуються одразу."));
-    help->setWordWrap(true);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save |
-                                        QDialogButtonBox::Cancel);
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->addLayout(form);
-    layout->addWidget(help);
-    layout->addWidget(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
-                     &QDialog::accept);
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                     &QDialog::reject);
-
-    const bool was_paused = paused;
-    paused = true;
+  };
+  tray_callbacks.on_activate_source = [&](int index) {
     clear_input();
     undo.valid = false;
-    update_tray();
-    const int result = dialog.exec();
+    cinnamon.activate(index);
+  };
+  tray_callbacks.on_quit = [] { g_stop = 1; };
+  tray_callbacks.on_modal_pause = [&](bool entering) {
+    if (entering) {
+      drain_ctrl();
+      track_last_window();
+      saved_modal_paused = paused;
+      paused = true;
+      clear_input();
+      undo.valid = false;
+      update_tray();
+    } else {
+      listener.drain();
+      listener.take();
+      drain_ctrl();
+      clear_input();
+      paused = saved_modal_paused;
+      update_tray();
+    }
+  };
+  tray_callbacks.on_after_modal = [&] {
     listener.drain();
     listener.take();
     drain_ctrl();
-    clear_input();
-    paused = was_paused;
     update_tray();
-    if (result != QDialog::Accepted) {
-      return;
-    }
-
-    auto read_hotkey_edit = [](const QKeySequenceEdit *edit) {
-      return hotkey_from_qt_sequence(
-          edit->keySequence().toString(QKeySequence::PortableText).toStdString());
-    };
-    const std::string new_pause_text = read_hotkey_edit(pause_hotkey);
-    const std::string new_undo_text = read_hotkey_edit(undo_hotkey);
-    const std::string new_convert_text = read_hotkey_edit(convert_hotkey);
-    const Hotkey new_pause = parse_hotkey(new_pause_text);
-    const Hotkey new_undo = parse_hotkey(new_undo_text);
-    const Hotkey new_convert = parse_hotkey(new_convert_text);
-    const unsigned new_pause_kc = hotkey_keycode(x11, new_pause);
-    const unsigned new_undo_kc = hotkey_keycode(x11, new_undo);
-    const unsigned new_convert_kc = hotkey_keycode(x11, new_convert);
-    if (new_pause_kc == 0 || new_undo_kc == 0 || new_convert_kc == 0 ||
-        same_hotkey(new_pause, new_pause_kc, new_undo, new_undo_kc) ||
-        same_hotkey(new_pause, new_pause_kc, new_convert, new_convert_kc) ||
-        same_hotkey(new_undo, new_undo_kc, new_convert, new_convert_kc)) {
-      QMessageBox::warning(
-          nullptr, QStringLiteral("Неправильні клавіші"),
-          QStringLiteral(
-              "Вкажи три різні доступні клавіші (для літерних комбінацій "
-              "перемкнись на латиницю)."));
-      listener.drain();
-      listener.take();
-      drain_ctrl();
-      return;
-    }
-
-    Config updated = config;
-    updated.min_length = minimum_length->value();
-    updated.pause_key = new_pause_text;
-    updated.undo_key = new_undo_text;
-    updated.convert_key = new_convert_text;
-    updated.exclude.clear();
-    for (const auto &line : excluded_windows->toPlainText().split('\n')) {
-      const auto name = line.trimmed();
-      if (!name.isEmpty()) {
-        updated.exclude.push_back(name.toStdString());
-      }
-    }
-    updated.ignore_words.clear();
-    for (const auto &line : ignored_words_edit->toPlainText().split('\n')) {
-      for (const auto &part : line.split(',')) {
-        const auto word = part.trimmed();
-        if (!word.isEmpty()) {
-          updated.ignore_words.push_back(word.toStdString());
-        }
-      }
-    }
-    const std::string save_path = config.config_path_explicit
-                                      ? config.config_path
-                                      : config.user_config_path;
-    updated.config_path = save_path;
-    if (!save_config_file(updated, save_path)) {
-      QMessageBox::critical(nullptr, QStringLiteral("Не вдалося зберегти"),
-                            QStringLiteral("Перевір права доступу до конфігу."));
-      listener.drain();
-      listener.take();
-      drain_ctrl();
-      return;
-    }
-
+  };
+  tray_callbacks.get_config = [&]() -> const Config & { return config; };
+  tray_callbacks.get_last_window = [&] { return last_app_wm_class; };
+  tray_callbacks.validate_hotkeys = [&](const Config &candidate) {
+    const Hotkey p = parse_hotkey(candidate.pause_key);
+    const Hotkey u = parse_hotkey(candidate.undo_key);
+    const Hotkey c = parse_hotkey(candidate.convert_key);
+    const unsigned p_kc = hotkey_keycode(x11, p);
+    const unsigned u_kc = hotkey_keycode(x11, u);
+    const unsigned c_kc = hotkey_keycode(x11, c);
+    return p_kc != 0 && u_kc != 0 && c_kc != 0 &&
+           !same_hotkey(p, p_kc, u, u_kc) && !same_hotkey(p, p_kc, c, c_kc) &&
+           !same_hotkey(u, u_kc, c, c_kc);
+  };
+  tray_callbacks.apply_config = [&](Config updated) {
     config = std::move(updated);
-    pause_key = new_pause;
-    undo_key = new_undo;
-    convert_key = new_convert;
-    pause_kc = new_pause_kc;
-    undo_kc = new_undo_kc;
-    convert_kc = new_convert_kc;
+    pause_key = parse_hotkey(config.pause_key);
+    undo_key = parse_hotkey(config.undo_key);
+    convert_key = parse_hotkey(config.convert_key);
+    pause_kc = hotkey_keycode(x11, pause_key);
+    undo_kc = hotkey_keycode(x11, undo_key);
+    convert_kc = hotkey_keycode(x11, convert_key);
     ignore_set = build_ignore_set(config.ignore_words);
     rebuild_hotkey_modifier_keys();
-    log::info("налаштування збережено й застосовано");
-  });
-  QObject::connect(about_action, &QAction::triggered, [&] {
-    const QString text =
-        QStringLiteral("<h3>layout-fix %1</h3>"
-                       "<p>Автоматичне виправлення розкладки для X11 і Cinnamon.</p>"
-                       "<p>Мови: English (US), українська та російська.</p>"
-                       "<p>Ліцензія коду: GPL-3.0-or-later.</p>"
-                       "<br>"
-                       "<p>© 2026 Ihor Dolinskyi<p/>"
-                       "<p>Fallback-словник uk_UA: MPL-2.0.</p>")
-            .arg(QApplication::applicationVersion());
-    QMessageBox::about(nullptr, QStringLiteral("Про програму"), text);
-    update_tray();
-  });
-  QObject::connect(quit_action, &QAction::triggered,
-                   [] { g_stop = 1; });
-#endif
+  };
+  tray = std::make_unique<Tray>(std::move(tray_callbacks));
+  rebuild_language_menu();
+  update_tray(true);
 
   log::info("слухаю клавіатуру. Пауза: " + config.pause_key +
             ", скасувати: " + config.undo_key +
@@ -735,13 +437,11 @@ int App::run(Config config, bool check_only) {
             std::to_string(kLayoutSwitchTimeoutMs) + " мс");
 
   while (g_stop == 0) {
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
-    qt_app.processEvents(QEventLoop::AllEvents, 0);
+    tray->process_events();
     if (g_stop != 0) {
       break;
     }
     update_tray();
-#endif
     if (injecting && std::chrono::steady_clock::now() > inject_deadline) {
       log::error("не дочекався відлуння власних клавіш за " +
                  std::to_string(kEchoTimeoutMs) + " мс, продовжую слухати");
@@ -788,10 +488,8 @@ int App::run(Config config, bool check_only) {
       undo.valid = false;
       maps_ready = false;
       refresh_groups_pending = cinnamon.refresh();
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
       rebuild_language_menu();
       update_tray(true);
-#endif
       map_retry_at = std::chrono::steady_clock::now() +
                      std::chrono::milliseconds(250);
       log::error("Cinnamon змінив джерела; виправлення призупинено до оновлення XKB");
@@ -801,10 +499,8 @@ int App::run(Config config, bool check_only) {
       if (groups.init(false) && source_map_matches()) {
         maps_ready = true;
         refresh_groups_pending = false;
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
         rebuild_language_menu();
         update_tray(true);
-#endif
         log::info("мапи XKB і Cinnamon оновлено");
       } else {
         map_retry_at = std::chrono::steady_clock::now() +
@@ -860,9 +556,7 @@ int App::run(Config config, bool check_only) {
           paused = !paused;
           clear_input();
           undo.valid = false;
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
           update_tray();
-#endif
           log::info(paused ? "пауза" : "знову слухаю");
         } else if (want_undo && !paused && undo.valid) {
           auto original = std::move(undo.original);
@@ -971,9 +665,7 @@ int App::run(Config config, bool check_only) {
                                      *target, next_visited};
                 buffer.clear();
                 pending_short.clear();
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
                 update_tray();
-#endif
                 log::info("примусово виправлено останнє слово; мова " +
                           std::string(lang_name(*target)));
               } else {
@@ -1052,9 +744,7 @@ int App::run(Config config, bool check_only) {
                 if (cinnamon.activate(target_index)) {
                   groups.wait_until(converted.target, kLayoutSwitchTimeoutMs);
                 }
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
                 update_tray();
-#endif
               }
               clipboard.set(converted.text);
               retype.send_ctrl_v(echoes);
@@ -1253,9 +943,7 @@ int App::run(Config config, bool check_only) {
           undo = Undo{
               true,  std::move(original), std::move(output), from_index, lang,
               *target};
-#ifdef LAYOUT_FIX_HAVE_QT_TRAY
           update_tray();
-#endif
           log::info("виправлено слово або контекст; мова " +
                     std::string(lang_name(*target)));
         } else {
