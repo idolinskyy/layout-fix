@@ -542,6 +542,8 @@ int App::run(Config config, bool check_only) {
                        "<p>Автоматичне виправлення розкладки для X11 і Cinnamon.</p>"
                        "<p>Мови: English (US), українська та російська.</p>"
                        "<p>Ліцензія коду: GPL-3.0-or-later.<br>"
+                       "<br>"
+                       "© 2026 Ihor Dolinskyi"
                        "Fallback-словник uk_UA: MPL-2.0.</p>")
             .arg(QApplication::applicationVersion());
     QMessageBox::about(nullptr, QStringLiteral("Про програму"), text);
@@ -828,11 +830,19 @@ int App::run(Config config, bool check_only) {
       }
       const auto current = groups.translate(event.keycode, group, shift, caps);
       std::array<std::string, 3> forms;
+      bool word_in_any_active = current.kind == Translated::Kind::Word;
       for (const Lang candidate : kSupportedLanguages) {
         const int candidate_group = groups.group_for(candidate);
         if (candidate_group >= 0) {
-          forms[lang_index(candidate)] =
-              groups.translate(event.keycode, candidate_group, shift, caps).text;
+          const auto translated =
+              groups.translate(event.keycode, candidate_group, shift, caps);
+          forms[lang_index(candidate)] = translated.text;
+          const bool candidate_active =
+              candidate != Lang::Ru ||
+              (russian_dict_ready && cinnamon.index_of("ru") >= 0);
+          if (candidate_active && translated.kind == Translated::Kind::Word) {
+            word_in_any_active = true;
+          }
         }
       }
       if (config.debug_keys && !current.text.empty()) {
@@ -842,7 +852,7 @@ int App::run(Config config, bool check_only) {
       if (current.kind == Translated::Kind::Ignore) {
         continue;
       }
-      if (current.kind == Translated::Kind::Word) {
+      if (word_in_any_active) {
         undo.valid = false;
         if (buffer.group() < 0) {
           buffer.set_group(group);

@@ -128,6 +128,79 @@ int main() {
                                                layoutfix::Lang::En,
                                                dictionaries, 3));
 
+  // Words with letters on punctuation keys (б, ю, ж, х, ї, ', э, ё) and
+  // protection of real English punctuation.
+  layoutfix::Dictionary punct_en;
+  layoutfix::Dictionary punct_uk;
+  layoutfix::Dictionary punct_ru;
+  CHECK(punct_en.load_text("6\nhe\nks\nhello\nyes\nh\na\n"));
+  CHECK(punct_uk.load_text(
+      "12\nруб\nхліб\nжиття\nпроблемі\nлюдина\nможна\nхочу\nїжа\nтакож\nдух\nп'ять\nбо\nщо\n"));
+  CHECK(punct_ru.load_text("3\nруб\nЭто\nёлка\n"));
+  const std::array<const layoutfix::Dictionary *, 3> punct_dicts{
+      &punct_en, &punct_uk, &punct_ru};
+
+  // Mismatched punctuation "[ks," -> Ukrainian "хліб" (even though "ks" is in en).
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"[ks,"}, {"хліб"}, {"хлыб"}}}, layoutfix::Lang::En, punct_dicts,
+            3) == layoutfix::Lang::Uk);
+  // Start / middle / end punctuation-key letters.
+  CHECK(layoutfix::unique_language_candidate(
+            {{{";bnnz"}, {"життя"}, {"життя"}}}, layoutfix::Lang::En,
+            punct_dicts, 3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"ghj,ktvs"}, {"проблемі"}, {"проблемы"}}}, layoutfix::Lang::En,
+            punct_dicts, 3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"k.lbyf"}, {"людина"}, {"людина"}}}, layoutfix::Lang::En,
+            punct_dicts, 3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"vj;yf"}, {"можна"}, {"можна"}}}, layoutfix::Lang::En,
+            punct_dicts, 3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"[jxe"}, {"хочу"}, {"хочу"}}}, layoutfix::Lang::En, punct_dicts,
+            3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"];f"}, {"їжа"}, {"ъжа"}}}, layoutfix::Lang::En, punct_dicts,
+            3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"nfrj;"}, {"також"}, {"також"}}}, layoutfix::Lang::En,
+            punct_dicts, 3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"le["}, {"дух"}, {"дух"}}}, layoutfix::Lang::En, punct_dicts,
+            3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"g`znm"}, {"п'ять"}, {"пёять"}}}, layoutfix::Lang::En,
+            punct_dicts, 3) == layoutfix::Lang::Uk);
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"\"nj"}, {"Єто"}, {"Это"}}}, layoutfix::Lang::En, punct_dicts,
+            3) == layoutfix::Lang::Ru);
+  // Short multi-word context with punctuation-key letter (",j oj" -> "бо що").
+  CHECK(layoutfix::unique_language_candidate(
+            {{{",j", "oj"}, {"бо", "що"}, {"бо", "що"}}}, layoutfix::Lang::En,
+            punct_dicts, 3) == layoutfix::Lang::Uk);
+  // English word with trailing punctuation typed in Uk ("руддщб" -> "hello,").
+  CHECK(layoutfix::unique_language_candidate(
+            {{{"hello,"}, {"руддщб"}, {"руддщб"}}}, layoutfix::Lang::Uk,
+            punct_dicts, 3) == layoutfix::Lang::En);
+  // Short English core ("h,.") typed in Uk must NOT switch when core < min_length.
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"h,."}, {"рбю"}, {"рбю"}}}, layoutfix::Lang::Uk, punct_dicts,
+            3));
+  // Real English with natural punctuation MUST be kept (no false switch!).
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"he,"}, {"руб"}, {"руб"}}}, layoutfix::Lang::En, punct_dicts,
+            3));
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"[hello]"}, {"хруддщї"}, {"хруддщъ"}}}, layoutfix::Lang::En,
+            punct_dicts, 3));
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"\"hello\","}, {"ЄруддщЄб"}, {"ЭруддщЭб"}}}, layoutfix::Lang::En,
+            punct_dicts, 3));
+  CHECK(!layoutfix::unique_language_candidate(
+            {{{"..."}, {"ююю"}, {"ююю"}}}, layoutfix::Lang::En, punct_dicts,
+            3));
+
   layoutfix::WordBuffer buffer;
   buffer.set_group(0);
   buffer.push_word(42, false, layoutfix::Lang::En, {"g", "п", "г"});
@@ -326,6 +399,35 @@ int main() {
                                       real_english, real, 3) == Decision::Keep);
       CHECK(layoutfix::decide_context({"ye", "s", "oj"}, {"ну", "і", "що"},
                                       real_english, real, 3) == Decision::Switch);
+      const std::array<const layoutfix::Dictionary *, 3> real_en_uk{
+          &real_english, &real, nullptr};
+      CHECK(layoutfix::unique_language_candidate(
+                {{{"[ks,"}, {"хліб"}, {""}}}, layoutfix::Lang::En, real_en_uk,
+                3) == layoutfix::Lang::Uk);
+      CHECK(!layoutfix::unique_language_candidate(
+                {{{"he,"}, {"руб"}, {""}}}, layoutfix::Lang::En, real_en_uk,
+                3));
+      CHECK(layoutfix::unique_language_candidate(
+                {{{"ghj,ktvs"}, {"проблемі"}, {""}}}, layoutfix::Lang::En,
+                real_en_uk, 3) == layoutfix::Lang::Uk);
+      CHECK(layoutfix::unique_language_candidate(
+                {{{";bnnz"}, {"життя"}, {""}}}, layoutfix::Lang::En,
+                real_en_uk, 3) == layoutfix::Lang::Uk);
+      CHECK(layoutfix::unique_language_candidate(
+                {{{"k.lbyf"}, {"людина"}, {""}}}, layoutfix::Lang::En,
+                real_en_uk, 3) == layoutfix::Lang::Uk);
+      CHECK(layoutfix::unique_language_candidate(
+                {{{"vj;yf"}, {"можна"}, {""}}}, layoutfix::Lang::En,
+                real_en_uk, 3) == layoutfix::Lang::Uk);
+      CHECK(layoutfix::unique_language_candidate(
+                {{{"[jxe"}, {"хочу"}, {""}}}, layoutfix::Lang::En,
+                real_en_uk, 3) == layoutfix::Lang::Uk);
+      CHECK(layoutfix::unique_language_candidate(
+                {{{",j", "oj"}, {"бо", "що"}, {"", ""}}}, layoutfix::Lang::En,
+                real_en_uk, 3) == layoutfix::Lang::Uk);
+      CHECK(layoutfix::unique_language_candidate(
+                {{{"hello,"}, {"руддщб"}, {""}}}, layoutfix::Lang::Uk,
+                real_en_uk, 3) == layoutfix::Lang::En);
     }
   } else {
     std::cerr << "FAIL немає uk_UA.dic для перевірки справжнього словника\n";

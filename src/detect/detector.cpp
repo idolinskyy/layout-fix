@@ -3,6 +3,125 @@
 #include "utf8.hpp"
 
 namespace layoutfix {
+namespace {
+
+bool is_opening_punct(char ch) {
+    return ch == '"' || ch == '\'' || ch == '[' || ch == '{' || ch == '<' ||
+           ch == '`';
+}
+
+bool is_trailing_punct(char ch) {
+    return ch == ',' || ch == '.' || ch == ';' || ch == ':' || ch == '"' ||
+           ch == '\'' || ch == ']' || ch == '}' || ch == '>';
+}
+
+char matching_close(char open) {
+    switch (open) {
+        case '[':
+            return ']';
+        case '{':
+            return '}';
+        case '<':
+            return '>';
+        case '"':
+            return '"';
+        case '\'':
+            return '\'';
+        case '`':
+            return '`';
+        default:
+            return '\0';
+    }
+}
+
+bool starts_with_word_char(std::string_view text) {
+    if (text.empty()) {
+        return false;
+    }
+    std::size_t i = 0;
+    return utf8::is_word_char(utf8::decode_at(text, i));
+}
+
+bool ends_with_word_char(std::string_view text) {
+    if (text.empty()) {
+        return false;
+    }
+    std::size_t i = 0;
+    char32_t last = 0;
+    while (i < text.size()) {
+        last = utf8::decode_at(text, i);
+    }
+    return utf8::is_word_char(last);
+}
+
+bool word_accepted_by(std::string_view word, const Dictionary& dict,
+                      bool is_source, std::size_t min_target_len) {
+    if (word.empty()) {
+        return false;
+    }
+    if (dict.contains(word)) {
+        return true;
+    }
+
+    // 1) Природна кінцева пунктуація після слова (напр. "he,", "hello.", "руддщб" -> "hello,").
+    {
+        std::string_view core = word;
+        while (!core.empty() && is_trailing_punct(core.back())) {
+            core.remove_suffix(1);
+        }
+        if (core.size() < word.size() && !core.empty() &&
+            starts_with_word_char(core)) {
+            if (is_source) {
+                if (dict.contains(core)) {
+                    return true;
+                }
+            } else if (utf8::char_count(core) >= min_target_len &&
+                       dict.contains(core)) {
+                return true;
+            }
+        }
+    }
+
+    if (!is_source) {
+        return false;
+    }
+
+    // 2) Відкривальна пунктуація на початку слова вихідної мови (напр. "[hello", "\"hello").
+    {
+        std::string_view core = word;
+        while (!core.empty() && is_opening_punct(core.front())) {
+            core.remove_prefix(1);
+        }
+        if (core.size() < word.size() && !core.empty() &&
+            ends_with_word_char(core) && dict.contains(core)) {
+            return true;
+        }
+    }
+
+    // 3) Парне обрамлення + необов'язкова кінцева пунктуація (напр. "[hello]", "\"hello\",").
+    {
+        std::string_view inner = word;
+        while (!inner.empty() &&
+               (inner.back() == ',' || inner.back() == '.' ||
+                inner.back() == ';' || inner.back() == ':')) {
+            inner.remove_suffix(1);
+        }
+        bool unwrapped = false;
+        while (inner.size() >= 2 &&
+               matching_close(inner.front()) == inner.back()) {
+            inner.remove_prefix(1);
+            inner.remove_suffix(1);
+            unwrapped = true;
+        }
+        if (unwrapped && !inner.empty() && dict.contains(inner)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+}  // namespace
 
 Decision decide(std::string_view current, std::string_view other,
                 const Dictionary& current_dict, const Dictionary& other_dict,
@@ -81,14 +200,19 @@ std::optional<Lang> unique_language_candidate(
         }
     }
 
+    const std::size_t min_target_len =
+        word_count == 1 ? static_cast<std::size_t>(min_length) : 1;
+
     std::optional<Lang> match;
     for (std::size_t language = 0; language < dictionaries.size(); ++language) {
         if (dictionaries[language] == nullptr) {
             continue;
         }
+        const bool is_source = language == source_index;
         bool accepts_all = true;
         for (const auto& word : words_by_language[language]) {
-            if (!dictionaries[language]->contains(word)) {
+            if (!word_accepted_by(word, *dictionaries[language], is_source,
+                                  min_target_len)) {
                 accepts_all = false;
                 break;
             }
