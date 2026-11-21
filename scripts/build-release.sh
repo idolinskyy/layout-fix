@@ -68,8 +68,12 @@ EOF
 
 mkdir -p "$dist_dir"
 artifact="$dist_dir/layout-fix-$version-linux-$architecture.tar.gz"
+tar_entries=(usr)
+if [[ -d "$stage_dir/etc" ]]; then
+  tar_entries+=(etc)
+fi
 tar -C "$stage_dir" --sort=name --mtime='@0' --owner=0 --group=0 \
-  --numeric-owner -cf - usr | gzip -n > "$artifact"
+  --numeric-owner -cf - "${tar_entries[@]}" | gzip -n > "$artifact"
 sha256sum "$artifact" > "$artifact.sha256"
 
 deb_architecture="$(dpkg --print-architecture)"

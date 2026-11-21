@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(VERSION 0.3.0 CACHE STRING "layout-fix package version")
+set(VERSION 0.3.1 CACHE STRING "layout-fix package version")
 project(layout-fix VERSION ${VERSION} LANGUAGES CXX)
 
 include(GNUInstallDirs)
@@ -81,8 +81,6 @@ add_executable(layout-fix
 
 configure_file(data/layout-fix.desktop.in
   ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.desktop @ONLY)
-configure_file(data/layout-fix.service.in
-  ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.service @ONLY)
 configure_file(data/layout-fix-launcher.in
   ${CMAKE_CURRENT_BINARY_DIR}/layout-fix-launcher @ONLY)
 
@@ -170,8 +168,8 @@ install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/layout-fix-launcher
   DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME layout-fix)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.desktop
   DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.service
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/user)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/layout-fix.desktop
+  DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/xdg/autostart)
 install(FILES config/layout-fix.conf DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/xdg/layout-fix)
 install(FILES data/dicts/uk_UA.dic data/dicts/uk_UA.COPYRIGHT
         DESTINATION ${CMAKE_INSTALL_DATADIR}/layout-fix)

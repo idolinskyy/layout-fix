@@ -32,27 +32,20 @@ ctest --test-dir build --output-on-failure
 
 `--check` з'єднується з X11, читає групи клавіатури і словники, потім виходить без слухання клавіш.
 
-Для Linux-артефактів релізу виконай `scripts/build-release.sh`. Скрипт перевіряє словники, збирає Release (за замовчуванням із системним Qt 6), проганяє `ctest` і створює `.tar.gz` та `.deb` у `dist/` із версією з CMake (або перевизначеною через `VERSION=...`), плюс `.sha256` до кожного файла. Debian-пакет залежить від системних бібліотек (`libqt6widgets6t64 | libqt6widgets6`, `qt6-qpa-plugins`, Hunspell, X11/XTest/xkbcommon/GLib), тому після встановлення працює одразу:
+Для Linux-артефактів релізу виконай `scripts/build-release.sh`. Скрипт перевіряє словники, збирає Release (за замовчуванням із системним Qt 6), проганяє `ctest` і створює `.tar.gz` та `.deb` у `dist/` із версією з CMake (або перевизначеною через `VERSION=...`), плюс `.sha256` до кожного файла. Debian-пакет залежить від системних бібліотек (`libqt6widgets6t64 | libqt6widgets6`, `qt6-qpa-plugins`, Hunspell, X11/XTest/xkbcommon/GLib) і сам додає автозапуск для Cinnamon (`/etc/xdg/autostart/layout-fix.desktop`):
 
 ```bash
-sudo apt install ./dist/layout-fix_0.3.0_amd64.deb
-systemctl --user daemon-reload
-systemctl --user enable --now layout-fix.service
+sudo apt install ./dist/layout-fix_0.3.1_amd64.deb
 ```
 
-Якщо використовується нестандартний Qt (наприклад, із Qt Installer у `$HOME/Qt/...`), передай каталог `gcc_64` через `CMAKE_PREFIX_PATH` під час збірки та `QT_PREFIX` під час запуску:
+Після встановлення `layout-fix` автоматично запускатиметься при кожному вході в Cinnamon (керується у стандартних «Програмах автозапуску»). Щоб запустити одразу в поточній сесії без перелогінення, відкрий **Layout Fix** у меню програм або виконай `layout-fix &`.
+
+Якщо використовується нестандартний Qt (наприклад, із Qt Installer у `$HOME/Qt/...`), передай каталог `gcc_64` через `CMAKE_PREFIX_PATH` під час збірки та `QT_PREFIX` під час запуску (для автозапуску задай `QT_PREFIX` у `~/.profile` або у власній копії `~/.config/autostart/layout-fix.desktop`):
 
 ```bash
 export QT_PREFIX="$HOME/Qt/6.12.0/gcc_64"
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$QT_PREFIX"
 QT_PREFIX="$QT_PREFIX" /usr/bin/layout-fix
-```
-
-Для user-service із нестандартним Qt задай `QT_PREFIX` у drop-in через `systemctl --user edit layout-fix`:
-
-```ini
-[Service]
-Environment=QT_PREFIX=%h/Qt/6.12.0/gcc_64
 ```
 
 ## Запуск і налаштування
@@ -83,17 +76,20 @@ Environment=QT_PREFIX=%h/Qt/6.12.0/gcc_64
 
 ## Автозапуск
 
-Для автозапуску використовуй user-сервіс systemd; CMake та Debian-пакет встановлюють launcher у відповідний `bin` каталог:
+Автозапуск у Cinnamon працює через XDG Autostart: Debian-пакет і `cmake --install` встановлюють `/etc/xdg/autostart/layout-fix.desktop` (`OnlyShowIn=X-Cinnamon;`, `X-GNOME-Autostart-enabled=true`). Його можна увімкнути або вимкнути у стандартній програмі Cinnamon **«Програми автозапуску»** (Startup Applications).
+
+Для встановлення вручну зі збірки:
 
 ```bash
-sudo cmake --install build
-mkdir -p ~/.config/systemd/user
-cp build/layout-fix.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now layout-fix.service
+sudo cmake --install build --prefix /usr
 ```
 
-Не додавай desktop autostart разом із сервісом: це створить другий запуск.
+Якщо раніше у версіях `0.1–0.3.0` вмикався `layout-fix.service`, вимкни його одноразово:
+
+```bash
+systemctl --user disable --now layout-fix.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/layout-fix.service
+```
 
 ## Ліцензія
 

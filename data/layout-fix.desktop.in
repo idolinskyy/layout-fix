@@ -1,4 +1,3 @@
-# Не класти в ~/.config/autostart/, якщо увімкнено layout-fix.service.
 [Desktop Entry]
 Type=Application
 Name=Layout Fix
@@ -6,5 +5,5 @@ Comment=Виправляє слово, набране не в тій розкл�
 Exec=@CMAKE_INSTALL_FULL_BINDIR@/layout-fix
 Terminal=false
 Categories=Utility;
-X-GNOME-Autostart-enabled=false
+X-GNOME-Autostart-enabled=true
 OnlyShowIn=X-Cinnamon;
