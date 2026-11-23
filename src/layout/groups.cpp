@@ -1,5 +1,6 @@
 #include "layout/groups.hpp"
 
+#include "layout/classify.hpp"
 #include "log.hpp"
 #include "utf8.hpp"
 
@@ -41,7 +42,6 @@ struct Groups::Impl {
   std::array<Lang, kMaxGroups> langs{};
   std::array<std::unordered_map<std::string, KeyHit>, kMaxGroups> keys{};
   LayoutMaps layout_maps{};
-  int s_keycode = 0;
 
   ~Impl() {
     if (desc != nullptr) {
@@ -114,44 +114,49 @@ bool Groups::init(bool report) {
   int min_kc = 0;
   int max_kc = 0;
   XDisplayKeycodes(dpy, &min_kc, &max_kc);
-  for (int kc = min_kc; kc <= max_kc; ++kc) {
-    if (impl_->keysym(static_cast<unsigned>(kc), 0, 0) == XK_s) {
-      impl_->s_keycode = kc;
-      break;
-    }
-  }
-  if (impl_->s_keycode == 0) {
-    if (report) {
-      log::error("не знайдено клавішу S в англійській групі");
-    }
-    return false;
-  }
 
+  // Літери для розпізнавання мови беремо лише з реально заданої групи.
+  // Інакше XKB підставляє групу 0 у клавіші без власного символу, і англійська
+  // група після української отримує чужі літери.
+  auto symbols_at = [&](unsigned keycode, int group, int level) -> KeySym {
+    if (impl_->desc == nullptr || group < 0 || level < 0) {
+      return NoSymbol;
+    }
+    const int defined = XkbKeyNumGroups(impl_->desc, keycode);
+    if (defined <= 0 || group >= defined) {
+      return NoSymbol;
+    }
+    const int width = XkbKeyGroupsWidth(impl_->desc, keycode);
+    if (width <= 0 || level >= width) {
+      return NoSymbol;
+    }
+    return XkbKeySymsPtr(impl_->desc, keycode)[group * width + level];
+  };
+
+  std::array<GroupLetters, kMaxGroups> seen{};
   for (int group = 0; group < kMaxGroups; ++group) {
-    const auto text = keysym_utf8(
-        impl_->keysym(static_cast<unsigned>(impl_->s_keycode), group, 0));
-    if (text == "s") {
-      impl_->langs[static_cast<std::size_t>(group)] = Lang::En;
-    } else if (text == "і") {
-      impl_->langs[static_cast<std::size_t>(group)] = Lang::Uk;
-    } else if (text == "ы") {
-      impl_->langs[static_cast<std::size_t>(group)] = Lang::Ru;
-    } else {
-      impl_->langs[static_cast<std::size_t>(group)] = Lang::Other;
-    }
-
     auto &map = impl_->keys[static_cast<std::size_t>(group)];
     for (int kc = min_kc; kc <= max_kc; ++kc) {
       for (int level = 0; level < 2; ++level) {
+        const auto owned = keysym_utf8(
+            symbols_at(static_cast<unsigned>(kc), group, level));
+        if (!owned.empty()) {
+          note_group_letter(seen[static_cast<std::size_t>(group)], owned);
+        }
         auto utf =
             keysym_utf8(impl_->keysym(static_cast<unsigned>(kc), group, level));
-        if (utf.empty() || map.contains(utf)) {
+        if (utf.empty()) {
+          continue;
+        }
+        if (map.contains(utf)) {
           continue;
         }
         map.emplace(std::move(utf),
                     KeyHit{static_cast<unsigned>(kc), level == 1});
       }
     }
+    impl_->langs[static_cast<std::size_t>(group)] =
+        classify_group_letters(seen[static_cast<std::size_t>(group)]);
   }
 
   if (group_for(Lang::En) < 0 || group_for(Lang::Uk) < 0) {

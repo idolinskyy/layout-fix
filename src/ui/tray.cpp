@@ -25,6 +25,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSystemTrayIcon>
+#include <QTimer>
 #include <QVBoxLayout>
 #endif
 
@@ -98,6 +99,20 @@ std::string read_hotkey_edit(const QKeySequenceEdit *edit) {
   return hotkey_from_qt_sequence(
       edit->keySequence().toString(QKeySequence::PortableText).toStdString());
 }
+
+class InputPump {
+public:
+    explicit InputPump(const std::function<void()> &fn) {
+        if (!fn) {
+            return;
+        }
+        QObject::connect(&timer_, &QTimer::timeout, [fn] { fn(); });
+        timer_.start(30);
+    }
+
+private:
+    QTimer timer_;
+};
 
 }  // namespace
 
@@ -257,6 +272,7 @@ struct Tray::Impl {
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
                      &QDialog::reject);
 
+    InputPump pump(callbacks.pump_ignored_input);
     const int result = dialog.exec();
     if (callbacks.on_modal_pause) {
       callbacks.on_modal_pause(false);
@@ -325,6 +341,7 @@ struct Tray::Impl {
                        "<p>© 2026 Ihor Dolinskyi</p>"
                        "<p>Fallback-словник uk_UA: MPL-2.0.</p>")
             .arg(QApplication::applicationVersion());
+    InputPump pump(callbacks.pump_ignored_input);
     QMessageBox::about(nullptr, QStringLiteral("Про програму"), text);
     if (callbacks.on_after_modal) {
       callbacks.on_after_modal();
@@ -408,7 +425,24 @@ void Tray::process_events() {
   impl_->qt_app.processEvents(QEventLoop::AllEvents, 0);
 }
 
+void report_to_user(std::string_view message) {
+  log::error(message);
+  const QString text = QString::fromUtf8(message.data(), static_cast<qsizetype>(message.size()));
+  if (QCoreApplication::instance() != nullptr) {
+    QMessageBox::warning(nullptr, QStringLiteral("layout-fix"), text);
+    return;
+  }
+  int argc = 1;
+  char name[] = "layout-fix";
+  char *argv[] = {name, nullptr};
+  QApplication app(argc, argv);
+  QApplication::setApplicationName(QStringLiteral("layout-fix"));
+  QMessageBox::warning(nullptr, QStringLiteral("layout-fix"), text);
+}
+
 #else
+
+void report_to_user(std::string_view message) { log::error(message); }
 
 struct Tray::Impl {};
 

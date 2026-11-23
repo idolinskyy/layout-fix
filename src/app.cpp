@@ -1,13 +1,16 @@
 #include "app.hpp"
 
+#include "a11y/password.hpp"
 #include "detect/detector.hpp"
 #include "detect/selection.hpp"
 #include "events.hpp"
 #include "input/echoes.hpp"
-#include "input/undo_restore.hpp"
+#include "input/pending.hpp"
+#include "input/undo_state.hpp"
 #include "input/word_buffer.hpp"
 #include "layout/cinnamon.hpp"
 #include "layout/groups.hpp"
+#include "layout/switch_outcome.hpp"
 #include "log.hpp"
 #include "timing.hpp"
 #include "tray_state.hpp"
@@ -37,20 +40,6 @@ namespace {
 volatile std::sig_atomic_t g_stop = 0;
 
 void on_signal(int) { g_stop = 1; }
-
-struct Undo {
-  bool valid = false;
-  std::vector<Stroke> original;
-  std::vector<Stroke> shown;
-  int source_index = -1;
-  Lang source_lang = Lang::Other;
-  Lang shown_lang = Lang::Other;
-};
-
-struct PendingWord {
-  std::array<std::string, 3> forms;
-  std::vector<Stroke> strokes;
-};
 
 struct LastWord {
   bool valid = false;
@@ -126,14 +115,35 @@ bool is_command_modifier(unsigned state) {
 
 int App::run(Config config, bool check_only) {
   log::set_debug_keys(config.debug_keys);
+  auto fatal = [&](const std::string &message) {
+    if (check_only) {
+      log::error(message);
+    } else {
+      report_to_user(message);
+    }
+    return 1;
+  };
 
   XConnection x11;
   if (!x11.open()) {
+    if (!check_only) {
+      report_to_user(
+          "немає з'єднання з X11. Потрібна сесія X-Cinnamon, не Wayland");
+    }
     return 1;
   }
   Groups groups(x11);
   CinnamonLayout cinnamon;
-  if (!groups.init() || !cinnamon.open()) {
+  if (!groups.init()) {
+    if (!check_only) {
+      report_to_user("не вдалося прочитати розкладки XKB");
+    }
+    return 1;
+  }
+  if (!cinnamon.open()) {
+    if (!check_only) {
+      report_to_user("не вдалося з'єднатися з Cinnamon");
+    }
     return 1;
   }
   Focus focus(x11);
@@ -145,6 +155,25 @@ int App::run(Config config, bool check_only) {
             groups.group_for(Lang::Ru) == cinnamon.index_of("ru"));
   };
   bool maps_ready = source_map_matches();
+  bool output_desynced = false;
+  auto layouts_usable = [&] { return maps_ready && !output_desynced; };
+  auto active_source_lang = [&] {
+    for (const auto &source : cinnamon.sources()) {
+      if (!source.active) {
+        continue;
+      }
+      if (source.id == "us") {
+        return Lang::En;
+      }
+      if (source.id == "ua") {
+        return Lang::Uk;
+      }
+      if (source.id == "ru") {
+        return Lang::Ru;
+      }
+    }
+    return Lang::Other;
+  };
   if (!maps_ready) {
     log::error("мапи XKB і джерел Cinnamon не збігаються; виправлення призупинено");
   }
@@ -166,19 +195,16 @@ int App::run(Config config, bool check_only) {
   Dictionary ukrainian_dict;
   Dictionary russian_dict;
   if (en_path.empty() || !english_dict.load_file(en_path)) {
-    log::error("немає англійського словника. Встановіть hunspell-en-us");
-    return 1;
+    return fatal("немає англійського словника. Встановіть hunspell-en-us");
   }
   if (uk_path.empty() || !ukrainian_dict.load_file(uk_path)) {
-    log::error("немає українського словника. Встановіть hunspell-uk або "
-               "залиште data/dicts/uk_UA.dic");
-    return 1;
+    return fatal("немає українського словника. Встановіть hunspell-uk або "
+                 "залиште data/dicts/uk_UA.dic");
   }
   const bool russian_dict_ready =
       !ru_path.empty() && russian_dict.load_file(ru_path);
   if (cinnamon.index_of("ru") >= 0 && !russian_dict_ready) {
-    log::error("увімкнено ru у Cinnamon, але немає ru_RU.dic/.aff");
-    return 1;
+    return fatal("увімкнено ru у Cinnamon, але немає ru_RU.dic/.aff");
   }
   const std::array<const Dictionary *, 3> dictionaries{
       &english_dict, &ukrainian_dict,
@@ -206,8 +232,11 @@ int App::run(Config config, bool check_only) {
   Listener listener(x11);
   Clipboard clipboard(x11);
   if (!retype.init() || !listener.start() || !clipboard.init()) {
+    report_to_user("не вдалося почати слухати клавіатуру");
     return 1;
   }
+  PasswordFocus passwords;
+  passwords.open();
 
   auto drain_ctrl = [&] {
     auto *dpy = x11.ctrl();
@@ -339,7 +368,7 @@ int App::run(Config config, bool check_only) {
   auto update_tray = [&](bool force = false) {
     if (tray) {
       tray->update(groups.language_of(groups.current_group()),
-                   choose_tray_mode(paused, maps_ready), paused, force);
+                   choose_tray_mode(paused, layouts_usable()), paused, force);
     }
   };
   auto rebuild_language_menu = [&] {
@@ -368,13 +397,13 @@ int App::run(Config config, bool check_only) {
   tray_callbacks.on_toggle_pause = [&] {
     paused = !paused;
     clear_input();
-    undo.valid = false;
+    undo.clear();
     log::info(paused ? "пауза" : "знову слухаю");
     update_tray();
   };
   tray_callbacks.on_activate_source = [&](int index) {
     clear_input();
-    undo.valid = false;
+    undo.clear();
     cinnamon.activate(index);
   };
   tray_callbacks.on_quit = [] { g_stop = 1; };
@@ -385,7 +414,7 @@ int App::run(Config config, bool check_only) {
       saved_modal_paused = paused;
       paused = true;
       clear_input();
-      undo.valid = false;
+      undo.clear();
       update_tray();
     } else {
       listener.drain();
@@ -415,6 +444,11 @@ int App::run(Config config, bool check_only) {
            !same_hotkey(p, p_kc, u, u_kc) && !same_hotkey(p, p_kc, c, c_kc) &&
            !same_hotkey(u, u_kc, c, c_kc);
   };
+  tray_callbacks.pump_ignored_input = [&] {
+    listener.drain();
+    listener.take();
+    drain_ctrl();
+  };
   tray_callbacks.apply_config = [&](Config updated) {
     config = std::move(updated);
     pause_key = parse_hotkey(config.pause_key);
@@ -429,6 +463,63 @@ int App::run(Config config, bool check_only) {
   tray = std::make_unique<Tray>(std::move(tray_callbacks));
   rebuild_language_menu();
   update_tray(true);
+
+  auto mark_desynced = [&] {
+    output_desynced = true;
+    refresh_groups_pending = true;
+    map_retry_at = std::chrono::steady_clock::now() +
+                   std::chrono::milliseconds(250);
+    update_tray(true);
+    log::error("не вдалося узгодити розкладку XKB і Cinnamon; "
+               "виправлення призупинено");
+  };
+  auto switch_layout = [&](Lang target, Lang fallback) {
+    SwitchAttempt attempt;
+    const int target_index = cinnamon.index_of(cinnamon_source_id(target));
+    attempt.activate_ok =
+        target_index >= 0 && cinnamon.activate(target_index);
+    attempt.saw_target =
+        attempt.activate_ok &&
+        groups.wait_until(target, kLayoutSwitchTimeoutMs);
+    if (attempt.activate_ok && !attempt.saw_target) {
+      const int fallback_index =
+          cinnamon.index_of(cinnamon_source_id(fallback));
+      attempt.rollback_ok = fallback_index >= 0 &&
+                            cinnamon.activate(fallback_index);
+      attempt.saw_fallback =
+          attempt.rollback_ok &&
+          groups.wait_until(fallback, kLayoutSwitchTimeoutMs);
+      if (!attempt.saw_fallback) {
+        mark_desynced();
+      }
+    }
+    return resolve_switch(attempt);
+  };
+  auto insert_text = [&](std::string text, std::vector<EchoKey> &echoes) {
+    std::string saved;
+    bool had = false;
+    if (clip_restore.pending) {
+      had = clip_restore.had_saved;
+      saved = std::move(clip_restore.saved);
+      clip_restore.pending = false;
+    } else {
+      had = clipboard.read(kClipboardTimeoutMs, saved);
+    }
+    if (text.empty() || !clipboard.set(std::move(text))) {
+      if (had) {
+        clipboard.set(std::move(saved));
+      } else {
+        clipboard.clear();
+      }
+      return false;
+    }
+    retype.send_ctrl_v(echoes);
+    clip_restore = ClipboardRestore{
+        true, had, false, std::move(saved),
+        std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(kClipboardRestoreDelayMs)};
+    return true;
+  };
 
   log::info("слухаю клавіатуру. Пауза: " + config.pause_key +
             ", скасувати: " + config.undo_key +
@@ -485,8 +576,9 @@ int App::run(Config config, bool check_only) {
     }
     if (cinnamon.consume_sources_changed()) {
       clear_input();
-      undo.valid = false;
+      undo.clear();
       maps_ready = false;
+      output_desynced = false;
       refresh_groups_pending = cinnamon.refresh();
       rebuild_language_menu();
       update_tray(true);
@@ -494,10 +586,17 @@ int App::run(Config config, bool check_only) {
                      std::chrono::milliseconds(250);
       log::error("Cinnamon змінив джерела; виправлення призупинено до оновлення XKB");
     }
-    if (refresh_groups_pending &&
+    if ((refresh_groups_pending || output_desynced) &&
         std::chrono::steady_clock::now() >= map_retry_at) {
-      if (groups.init(false) && source_map_matches()) {
+      const bool indexes_ok = groups.init(false) && source_map_matches();
+      const Lang active = active_source_lang();
+      const Lang xkb_lang = groups.language_of(groups.current_group());
+      const bool active_ok =
+          !output_desynced ||
+          (active != Lang::Other && active == xkb_lang);
+      if (indexes_ok && active_ok) {
         maps_ready = true;
+        output_desynced = false;
         refresh_groups_pending = false;
         rebuild_language_menu();
         update_tray(true);
@@ -507,11 +606,15 @@ int App::run(Config config, bool check_only) {
                        std::chrono::milliseconds(250);
       }
     }
+    if (passwords.take_activated()) {
+      clear_input();
+      undo.clear();
+    }
     if (focus.window_id() != seen_window) {
       seen_window = focus.window_id();
       track_last_window();
       clear_input();
-      undo.valid = false;
+      undo.clear();
     }
 
     const auto batch = listener.take();
@@ -523,7 +626,7 @@ int App::run(Config config, bool check_only) {
                          event.type == RawEvent::Type::Press, event.keycode);
         if (button) {
           clear_input();
-          undo.valid = false;
+          undo.clear();
         }
         if (consumed == EchoConsume::Done) {
           injecting = false;
@@ -535,7 +638,7 @@ int App::run(Config config, bool check_only) {
           event.type == RawEvent::Type::Button) {
         if (event.type == RawEvent::Type::Button) {
           clear_input();
-          undo.valid = false;
+          undo.clear();
         }
         continue;
       }
@@ -555,42 +658,49 @@ int App::run(Config config, bool check_only) {
         if (want_pause) {
           paused = !paused;
           clear_input();
-          undo.valid = false;
+          undo.clear();
           update_tray();
           log::info(paused ? "пауза" : "знову слухаю");
-        } else if (want_undo && !paused && undo.valid) {
+        } else if (want_undo && !paused && undo.valid && !passwords.active()) {
+          const bool was_paste = undo.paste;
+          const int deleted = undo.delete_count();
           auto original = std::move(undo.original);
           auto shown = std::move(undo.shown);
-          const int index = undo.source_index;
+          std::string pasted = std::move(undo.paste_text);
           const Lang source_lang = undo.source_lang;
           const Lang shown_lang = undo.shown_lang;
-          undo.valid = false;
+          undo.clear();
           clear_input();
           std::vector<EchoKey> echoes;
-          const int deleted = static_cast<int>(shown.size());
           retype.replace(deleted, {}, echoes);
-          const bool confirmed =
-              cinnamon.activate(index) &&
-              groups.wait_until(source_lang, kLayoutSwitchTimeoutMs);
-          const Lang now = groups.language_of(groups.current_group());
-          const auto restore =
-              choose_undo_restore(confirmed, now, source_lang, shown_lang);
+          const auto outcome = switch_layout(source_lang, shown_lang);
           const auto timeout = std::to_string(kLayoutSwitchTimeoutMs);
-          if (restore == UndoRestore::Original) {
+          if (was_paste) {
+            if (insert_text(std::move(pasted), echoes)) {
+              log::info(outcome == SwitchOutcome::Applied
+                            ? "скасовано останнє виправлення"
+                            : "скасовано текст, розкладку не повернуто");
+            } else {
+              log::error("не вдалося повернути текст після скасування");
+            }
+          } else if (outcome == SwitchOutcome::Applied) {
             retype.replace(0, original, echoes);
             log::info("скасовано останнє виправлення");
-          } else if (restore == UndoRestore::Shown) {
+          } else if (outcome == SwitchOutcome::Restored) {
             retype.replace(0, shown, echoes);
             log::error("не вдалося повернути розкладку за " + timeout +
                        " мс, виправлене слово лишилось");
+          } else if (insert_text(build_replacement_text(original, source_lang),
+                                 echoes)) {
+            log::error("розкладка розійшлася, текст повернено через буфер обміну");
           } else {
             log::error("не вдалося повернути розкладку за " + timeout +
                        " мс, слово не набрано повторно");
           }
           x11.flush_ctrl();
           begin_inject(std::move(echoes));
-        } else if (want_convert && !paused && maps_ready &&
-                   !focus.excluded(config.exclude)) {
+        } else if (want_convert && !paused && layouts_usable() &&
+                   !focus.excluded(config.exclude) && !passwords.active()) {
           auto active_dictionaries = dictionaries;
           std::array<bool, 3> active_languages{
               groups.group_for(Lang::En) >= 0 && cinnamon.index_of("us") >= 0,
@@ -623,8 +733,6 @@ int App::run(Config config, bool check_only) {
                 word_to_fix.forms, word_to_fix.lang, active_dictionaries,
                 active_languages, word_to_fix.visited);
             if (target.has_value()) {
-              const int target_index =
-                  cinnamon.index_of(cinnamon_source_id(*target));
               const int target_group = groups.group_for(*target);
               const int from_index =
                   cinnamon.index_of(cinnamon_source_id(word_to_fix.lang));
@@ -646,35 +754,41 @@ int App::run(Config config, bool check_only) {
               }
               std::vector<EchoKey> echoes;
               retype.replace(static_cast<int>(original.size()), {}, echoes);
-              if (cinnamon.activate(target_index) &&
-                  groups.wait_until(*target, kLayoutSwitchTimeoutMs)) {
+              const auto outcome = switch_layout(*target, word_to_fix.lang);
+              if (outcome == SwitchOutcome::Applied) {
                 retype.replace(0, output, echoes);
-                undo = Undo{true,
-                            original,
-                            output,
-                            from_index,
-                            word_to_fix.lang,
-                            *target};
                 auto next_visited = word_to_fix.visited;
                 if (next_visited[lang_index(*target)]) {
                   // Завершили повне коло — починаємо новий цикл із *target.
                   next_visited = {false, false, false};
                 }
                 next_visited[lang_index(*target)] = true;
-                last_word = LastWord{true, word_to_fix.forms, std::move(output),
-                                     *target, next_visited};
+                last_word = LastWord{true, word_to_fix.forms, output, *target,
+                                     next_visited};
+                undo.arm_keys(std::move(original), std::move(output), from_index,
+                              word_to_fix.lang, *target);
                 buffer.clear();
                 pending_short.clear();
                 update_tray();
                 log::info("примусово виправлено останнє слово; мова " +
                           std::string(lang_name(*target)));
-              } else {
+              } else if (outcome == SwitchOutcome::Restored) {
                 retype.replace(0, original, echoes);
                 clear_input();
-                undo.valid = false;
+                undo.clear();
                 log::error("не вдалося перемкнути розкладку за " +
                            std::to_string(kLayoutSwitchTimeoutMs) +
                            " мс, слово повернуто");
+              } else if (insert_text(
+                             build_replacement_text(original, word_to_fix.lang),
+                             echoes)) {
+                clear_input();
+                undo.clear();
+                log::error("розкладка розійшлася, слово повернено через буфер обміну");
+              } else {
+                clear_input();
+                undo.clear();
+                log::error("не вдалося повернути слово після розходження розкладки");
               }
               x11.flush_ctrl();
               begin_inject(std::move(echoes));
@@ -683,7 +797,7 @@ int App::run(Config config, bool check_only) {
           }
 
           clear_input();
-          undo.valid = false;
+          undo.clear();
           std::string saved_clip;
           bool had_saved = false;
           if (clip_restore.pending) {
@@ -736,14 +850,12 @@ int App::run(Config config, bool check_only) {
                 groups.language_of(groups.current_group());
             const auto converted = convert_selection(
                 selected, groups.layout_maps(), active_dictionaries,
-                active_languages, current_lang);
+                active_languages, current_lang, true);
             if (converted.changed) {
-              const int target_index =
-                  cinnamon.index_of(cinnamon_source_id(converted.target));
-              if (converted.target != current_lang && target_index >= 0) {
-                if (cinnamon.activate(target_index)) {
-                  groups.wait_until(converted.target, kLayoutSwitchTimeoutMs);
-                }
+              const int from_index =
+                  cinnamon.index_of(cinnamon_source_id(current_lang));
+              if (converted.target != current_lang) {
+                switch_layout(converted.target, current_lang);
                 update_tray();
               }
               clipboard.set(converted.text);
@@ -752,6 +864,9 @@ int App::run(Config config, bool check_only) {
                   true, had_saved, false, std::move(saved_clip),
                   std::chrono::steady_clock::now() +
                       std::chrono::milliseconds(kClipboardRestoreDelayMs)};
+              undo.arm_paste(selected,
+                             static_cast<int>(utf8::char_count(converted.text)),
+                             from_index, current_lang, converted.target);
               log::info("виправлено виділений текст; мова " +
                         std::string(lang_name(converted.target)));
             } else {
@@ -766,15 +881,15 @@ int App::run(Config config, bool check_only) {
         continue;
       }
 
-      if (!maps_ready) {
+      if (!layouts_usable()) {
         clear_input();
-        undo.valid = false;
+        undo.clear();
         continue;
       }
 
-      if (paused || focus.excluded(config.exclude)) {
+      if (paused || focus.excluded(config.exclude) || passwords.active()) {
         clear_input();
-        undo.valid = false;
+        undo.clear();
         continue;
       }
       if (key_in(event.keycode, hotkey_modifier_keys)) {
@@ -786,19 +901,28 @@ int App::run(Config config, bool check_only) {
       if (is_command_modifier(event.state) ||
           key_in(event.keycode, command_keys)) {
         clear_input();
-        undo.valid = false;
+        undo.clear();
         continue;
       }
       if (event.keycode == retype.backspace_keycode()) {
-        buffer.pop();
-        pending_short.clear();
-        last_word.valid = false;
-        undo.valid = false;
+        const bool ate_correction = undo.on_backspace();
+        const bool ate_live = buffer.pop();
+        if (ate_correction) {
+          last_word.valid = false;
+        }
+        const bool buffer_empty = buffer.empty();
+        auto restored = restore_pending_on_backspace(pending_short, ate_live,
+                                                     buffer_empty);
+        if (restored.restored) {
+          buffer.assign(groups.current_group(), restored.word.lang,
+                        std::move(restored.word.forms),
+                        std::move(restored.word.strokes));
+        }
         continue;
       }
       if (key_in(event.keycode, nav_keys)) {
         clear_input();
-        undo.valid = false;
+        undo.clear();
         continue;
       }
 
@@ -838,8 +962,7 @@ int App::run(Config config, bool check_only) {
         continue;
       }
       if (word_in_any_active) {
-        undo.valid = false;
-        last_word.valid = false;
+        undo.on_typed_key();
         if (buffer.group() < 0) {
           buffer.set_group(group);
         }
@@ -850,6 +973,11 @@ int App::run(Config config, bool check_only) {
       buffer.push_boundary(event.keycode, shift, current.text);
       const bool whitespace_boundary = current.text == " " || current.text == "\t" ||
                                        current.text == "\r" || current.text == "\n";
+      if (whitespace_boundary && buffer.has_word()) {
+        undo.on_word_committed();
+      } else {
+        undo.on_typed_key();
+      }
       auto active_dictionaries = dictionaries;
       if (cinnamon.index_of("ru") < 0) {
         active_dictionaries[lang_index(Lang::Ru)] = nullptr;
@@ -888,8 +1016,6 @@ int App::run(Config config, bool check_only) {
         const auto& current_strokes = buffer.strokes();
         original.insert(original.end(), current_strokes.begin(),
                         current_strokes.end());
-        const int target_index =
-            cinnamon.index_of(cinnamon_source_id(*target));
         const int target_group = groups.group_for(*target);
         std::vector<Stroke> output;
         output.reserve(original.size());
@@ -906,11 +1032,17 @@ int App::run(Config config, bool check_only) {
           output.push_back(std::move(boundary));
         }
         const int from_index = cinnamon.index_of(cinnamon_source_id(lang));
-        std::string paste_text;
+        std::array<std::string, 3> corrected_forms{};
+        if (!multi_word) {
+          for (const Lang candidate : kSupportedLanguages) {
+            corrected_forms[lang_index(candidate)] = buffer.text(candidate);
+          }
+        }
+        std::string replacement;
         std::string saved_clip;
         bool had_saved = false;
         if (multi_word) {
-          paste_text = build_replacement_text(original, *target);
+          replacement = build_replacement_text(original, *target);
           if (clip_restore.pending) {
             had_saved = clip_restore.had_saved;
             saved_clip = std::move(clip_restore.saved);
@@ -921,10 +1053,10 @@ int App::run(Config config, bool check_only) {
         }
         std::vector<EchoKey> echoes;
         retype.replace(static_cast<int>(original.size()), {}, echoes);
-        if (cinnamon.activate(target_index) &&
-            groups.wait_until(*target, kLayoutSwitchTimeoutMs)) {
-          if (multi_word && !paste_text.empty() &&
-              clipboard.set(std::move(paste_text))) {
+        const auto outcome = switch_layout(*target, lang);
+        if (outcome == SwitchOutcome::Applied) {
+          if (multi_word && !replacement.empty() &&
+              clipboard.set(std::move(replacement))) {
             retype.send_ctrl_v(echoes);
             clip_restore = ClipboardRestore{
                 true, had_saved, false, std::move(saved_clip),
@@ -940,9 +1072,17 @@ int App::run(Config config, bool check_only) {
             }
             retype.replace(0, output, echoes);
           }
-          undo = Undo{
-              true,  std::move(original), std::move(output), from_index, lang,
-              *target};
+          auto shown_keys = output;
+          undo.arm_keys(std::move(original), std::move(output), from_index, lang,
+                        *target);
+          clear_input();
+          if (!multi_word) {
+            std::array<bool, 3> visited{false, false, false};
+            visited[lang_index(*target)] = true;
+            last_word =
+                LastWord{true, corrected_forms, std::move(shown_keys), *target,
+                         visited};
+          }
           update_tray();
           log::info("виправлено слово або контекст; мова " +
                     std::string(lang_name(*target)));
@@ -954,17 +1094,23 @@ int App::run(Config config, bool check_only) {
               clipboard.clear();
             }
           }
-          retype.replace(0, original, echoes);
-          log::error("не вдалося перемкнути розкладку за " +
-                     std::to_string(kLayoutSwitchTimeoutMs) +
-                     " мс, слово повернуто");
+          if (outcome == SwitchOutcome::Restored) {
+            retype.replace(0, original, echoes);
+            log::error("не вдалося перемкнути розкладку за " +
+                       std::to_string(kLayoutSwitchTimeoutMs) +
+                       " мс, слово повернуто");
+          } else if (!insert_text(build_replacement_text(original, lang),
+                                  echoes)) {
+            log::error("не вдалося повернути слово після розходження розкладки");
+          } else {
+            log::error("розкладка розійшлася, слово повернено через буфер обміну");
+          }
+          clear_input();
+          undo.clear();
         }
         x11.flush_ctrl();
         begin_inject(std::move(echoes));
-        clear_input();
         continue;
-      } else {
-        undo.valid = false;
       }
       std::array<std::string, 3> current_word_forms;
       if (buffer.has_word()) {
@@ -977,7 +1123,7 @@ int App::run(Config config, bool check_only) {
         }
         last_word = LastWord{true, current_word_forms, buffer.strokes(), lang,
                              visited};
-      } else {
+      } else if (!undo.valid) {
         last_word.valid = false;
       }
       const auto& current_word = buffer.text(lang);
@@ -991,11 +1137,9 @@ int App::run(Config config, bool check_only) {
                             &ignore_set);
       if (whitespace_boundary && buffer.has_word() && !ignored &&
           (is_short || is_ambiguous)) {
-        pending_short.push_back(
-            PendingWord{std::move(current_word_forms), buffer.strokes()});
-        if (pending_short.size() > 3) {
-          pending_short.erase(pending_short.begin());
-        }
+        remember_pending(pending_short,
+                         PendingWord{std::move(current_word_forms),
+                                     buffer.strokes(), lang});
       } else {
         pending_short.clear();
       }

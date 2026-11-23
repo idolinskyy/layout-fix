@@ -15,6 +15,7 @@ find_package(X11 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
+pkg_check_modules(ATSPI QUIET IMPORTED_TARGET atspi-2)
 pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
 option(LAYOUT_FIX_REQUIRE_HUNSPELL "Fail if Hunspell development files are unavailable" OFF)
 if(LAYOUT_FIX_REQUIRE_HUNSPELL AND NOT HUNSPELL_FOUND)
@@ -77,6 +78,7 @@ add_executable(layout-fix
   src/detect/dictionary.cpp
   src/detect/detector.cpp
   src/detect/selection.cpp
+  src/a11y/password.cpp
   src/ui/tray.cpp)
 
 configure_file(data/layout-fix.desktop.in
@@ -138,6 +140,14 @@ target_link_libraries(layout-fix-x11-test PRIVATE
   ${X11_Xtst_LIB}
   PkgConfig::XKBCOMMON)
 
+if(ATSPI_FOUND)
+  target_compile_definitions(layout-fix PRIVATE LAYOUT_FIX_HAVE_ATSPI=1)
+  target_link_libraries(layout-fix PRIVATE PkgConfig::ATSPI)
+  message(STATUS "AT-SPI password-field detection enabled")
+else()
+  message(STATUS "AT-SPI not found; password-field detection disabled")
+endif()
+
 if(HUNSPELL_FOUND)
   foreach(target layout-fix layout-fix-test layout-fix-x11-test)
     target_compile_definitions(${target} PRIVATE LAYOUT_FIX_HAVE_HUNSPELL=1)
@@ -192,6 +202,10 @@ set(LAYOUT_FIX_DEB_DEPENDS
 if(Qt6Widgets_FOUND)
   string(APPEND LAYOUT_FIX_DEB_DEPENDS
     ", libqt6widgets6t64 | libqt6widgets6, qt6-qpa-plugins")
+endif()
+if(ATSPI_FOUND)
+  string(APPEND LAYOUT_FIX_DEB_DEPENDS
+    ", libatspi2.0-0t64 | libatspi2.0-0")
 endif()
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "${LAYOUT_FIX_DEB_DEPENDS}")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)

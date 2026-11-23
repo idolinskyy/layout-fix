@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <poll.h>
 #include <string>
@@ -296,6 +297,22 @@ int main(int argc, char **argv) {
   CHECK(main_got == "ghbdsn cdsn");
   stop_peer.store(true);
   peer_loop.join();
+
+  // Англійська не мусить бути першою групою XKB.
+  CHECK(std::system("setxkbmap -rules evdev -model pc105 -layout ua,us,ru") ==
+        0);
+  CHECK(groups.init(false));
+  CHECK(groups.group_for(layoutfix::Lang::Uk) == 0);
+  CHECK(groups.group_for(layoutfix::Lang::En) == 1);
+  CHECK(groups.group_for(layoutfix::Lang::Ru) == 2);
+  CHECK(groups.translate(s_kc, 0, false, false).text == "і");
+  CHECK(groups.translate(s_kc, 1, false, false).text == "s");
+  if (std::system("setxkbmap -rules evdev -model pc105 -layout "
+                  "'ua(phonetic),us'") == 0) {
+    CHECK(groups.init(false));
+    CHECK(groups.group_for(layoutfix::Lang::Uk) == 0);
+    CHECK(groups.group_for(layoutfix::Lang::En) == 1);
+  }
 
   XDestroyWindow(target_dpy, target_win);
   XCloseDisplay(target_dpy);

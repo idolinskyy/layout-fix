@@ -1,6 +1,7 @@
 #include "app.hpp"
 #include "config.hpp"
 #include "log.hpp"
+#include "ui/tray.hpp"
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -86,7 +87,7 @@ int main(int argc, char** argv) {
 
     InstanceLock lock;
     if (!check_only && !lock.acquire()) {
-        layoutfix::log::info("вже запущено інший примірник");
+        layoutfix::report_to_user("вже запущено інший примірник");
         return 0;
     }
 

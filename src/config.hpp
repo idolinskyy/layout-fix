@@ -31,6 +31,8 @@ struct Config {
                                    "keepassxc",
                                    "bitwarden",
                                    "1password",
+                                   "emacs",
+                                   "gvim",
                                    "layout-fix"};
   std::vector<std::string> ignore_words;
   std::string pause_key = "Pause";

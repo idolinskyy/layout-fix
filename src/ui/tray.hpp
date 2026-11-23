@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace layoutfix {
@@ -26,7 +27,10 @@ struct TrayCallbacks {
     std::function<std::string()> get_last_window;
     std::function<bool(const Config&)> validate_hotkeys;
     std::function<void(Config)> apply_config;
+    std::function<void()> pump_ignored_input;
 };
+
+void report_to_user(std::string_view message);
 
 class Tray {
 public:

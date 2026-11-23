@@ -1,10 +1,15 @@
 #include "config.hpp"
 #include "detect/detector.hpp"
+#include "a11y/password.hpp"
 #include "detect/dictionary.hpp"
+#include "input/pending.hpp"
+#include "input/undo_state.hpp"
+#include "input/word_buffer.hpp"
+#include "layout/classify.hpp"
+#include "layout/switch_outcome.hpp"
 #include "detect/selection.hpp"
 #include "input/echoes.hpp"
 #include "input/undo_restore.hpp"
-#include "input/word_buffer.hpp"
 #include "tray_state.hpp"
 #include "utf8.hpp"
 
@@ -77,6 +82,8 @@ int main() {
   CHECK(has_default_exclude("keepassxc"));
   CHECK(has_default_exclude("bitwarden"));
   CHECK(has_default_exclude("layout-fix"));
+  CHECK(has_default_exclude("emacs"));
+  CHECK(has_default_exclude("gvim"));
 
   const auto hk_pause = layoutfix::parse_hotkey("Pause");
   CHECK(hk_pause.keysym == "Pause" && !hk_pause.shift && !hk_pause.ctrl &&
@@ -510,6 +517,15 @@ int main() {
   const auto sel_unchanged = layoutfix::convert_selection(
       "12345", maps, sel_dicts, all_active, layoutfix::Lang::En);
   CHECK(!sel_unchanged.changed);
+  // Правильне українське слово не перекладається на російське лише через спільні клавіші.
+  const auto sel_keep_uk = layoutfix::convert_selection(
+      "привіт", maps, sel_dicts, all_active, layoutfix::Lang::Uk, true);
+  CHECK(!sel_keep_uk.changed);
+  // Нульовий рахунок без явного прохання лишає текст як є.
+  const auto sel_no_force = layoutfix::convert_selection(
+      "ghbdtn", maps, {&sel_en, &sel_uk, nullptr}, en_uk_active,
+      layoutfix::Lang::En, false);
+  CHECK(!sel_no_force.changed);
 
   // Copy-line-on-empty-selection guard (VS Code, JetBrains, Sublime, Kate).
   CHECK(layoutfix::is_copy_line_editor("Code", "code"));
@@ -546,6 +562,10 @@ int main() {
   // Non-copy-line app (Firefox/LibreOffice) -> allowed.
   CHECK(!layoutfix::looks_like_empty_line_copy(
       "ghbdsn cdsn\n", "", false, ""));
+  // VS Code explicitly says the selection is real, even if the line ends with \n.
+  CHECK(!layoutfix::looks_like_empty_line_copy(
+      "ghbdsn cdsn\n", "older selection", true,
+      R"({"version":1,"isFromEmptySelection":false})"));
 
   using layoutfix::Lang;
   using layoutfix::UndoRestore;
@@ -652,6 +672,123 @@ int main() {
                                                                                                                                                 real_dictionaries, 3) ==
                               layoutfix::Lang::Ru);
       }
+
+  layoutfix::GroupLetters latin;
+  latin.latin_letters = 26;
+  CHECK(layoutfix::classify_group_letters(latin) == layoutfix::Lang::En);
+  layoutfix::GroupLetters ukrainian_letters;
+  ukrainian_letters.uk_specific = 4;
+  ukrainian_letters.other_cyrillic = 30;
+  CHECK(layoutfix::classify_group_letters(ukrainian_letters) ==
+        layoutfix::Lang::Uk);
+  layoutfix::GroupLetters russian_letters;
+  russian_letters.ru_specific = 4;
+  russian_letters.other_cyrillic = 30;
+  CHECK(layoutfix::classify_group_letters(russian_letters) ==
+        layoutfix::Lang::Ru);
+  layoutfix::GroupLetters phonetic;
+  layoutfix::note_group_letter(phonetic, "с");
+  layoutfix::note_group_letter(phonetic, "і");
+  layoutfix::note_group_letter(phonetic, "ї");
+  layoutfix::note_group_letter(phonetic, "є");
+  CHECK(layoutfix::classify_group_letters(phonetic) == layoutfix::Lang::Uk);
+  layoutfix::GroupLetters empty_group;
+  CHECK(layoutfix::classify_group_letters(empty_group) == layoutfix::Lang::Other);
+  // Українські літери перемагають, навіть якщо поряд є латинські (група не перша).
+  layoutfix::GroupLetters ua_not_first = ukrainian_letters;
+  ua_not_first.latin_letters = 26;
+  CHECK(layoutfix::classify_group_letters(ua_not_first) == layoutfix::Lang::Uk);
+
+  CHECK(layoutfix::resolve_switch({true, true, false, false}) ==
+        layoutfix::SwitchOutcome::Applied);
+  CHECK(layoutfix::resolve_switch({false, false, false, false}) ==
+        layoutfix::SwitchOutcome::Restored);
+  CHECK(layoutfix::resolve_switch({true, false, true, true}) ==
+        layoutfix::SwitchOutcome::Restored);
+  CHECK(layoutfix::resolve_switch({true, false, true, false}) ==
+        layoutfix::SwitchOutcome::Desynced);
+  CHECK(layoutfix::resolve_switch({true, false, false, false}) ==
+        layoutfix::SwitchOutcome::Desynced);
+
+  layoutfix::Undo undo;
+  undo.arm_keys({}, {}, 1, layoutfix::Lang::En, layoutfix::Lang::Uk);
+  undo.base_delete = 6;
+  undo.on_typed_key();
+  undo.on_typed_key();
+  CHECK(undo.valid);
+  CHECK(undo.delete_count() == 8);
+  undo.on_backspace();
+  CHECK(undo.valid);
+  CHECK(undo.delete_count() == 7);
+  undo.on_word_committed();
+  CHECK(!undo.valid);
+  undo.arm_paste("ghbdsn", 6, 0, layoutfix::Lang::Uk, layoutfix::Lang::En);
+  CHECK(undo.paste);
+  CHECK(undo.on_backspace());
+  CHECK(!undo.valid);
+
+  layoutfix::WordBuffer live;
+  live.set_group(1);
+  live.push_word(10, false, layoutfix::Lang::Uk, {"y", "н", "н"});
+  live.push_word(11, false, layoutfix::Lang::Uk, {"e", "у", "у"});
+  live.push_boundary(12, false, " ");
+  std::vector<layoutfix::PendingWord> pending;
+  layoutfix::remember_pending(
+      pending, layoutfix::PendingWord{{live.text(layoutfix::Lang::En),
+                                       live.text(layoutfix::Lang::Uk),
+                                       live.text(layoutfix::Lang::Ru)},
+                                      live.strokes(),
+                                      layoutfix::Lang::Uk});
+  live.clear();
+  live.set_group(1);
+  live.push_word(13, false, layoutfix::Lang::Uk, {"s", "і", "ы"});
+  live.push_boundary(14, false, " ");
+  layoutfix::remember_pending(
+      pending, layoutfix::PendingWord{{live.text(layoutfix::Lang::En),
+                                       live.text(layoutfix::Lang::Uk),
+                                       live.text(layoutfix::Lang::Ru)},
+                                      live.strokes(),
+                                      layoutfix::Lang::Uk});
+  live.clear();
+  auto kept = layoutfix::restore_pending_on_backspace(pending, true, true);
+  CHECK(!kept.restored);
+  CHECK(pending.size() == 2);
+  auto restored = layoutfix::restore_pending_on_backspace(pending, false, true);
+  CHECK(restored.restored);
+  CHECK(pending.size() == 1);
+  CHECK(restored.word.lang == layoutfix::Lang::Uk);
+  CHECK(restored.word.forms[1] == "і");
+  CHECK(restored.word.strokes.size() == 1);
+  CHECK(restored.word.strokes.back().word);
+  live.assign(1, restored.word.lang, restored.word.forms,
+              std::move(restored.word.strokes));
+  CHECK(live.pop());
+  CHECK(live.empty());
+  auto older = layoutfix::restore_pending_on_backspace(pending, false, true);
+  CHECK(older.restored);
+  CHECK(older.word.forms[1] == "ну");
+  CHECK(older.word.strokes.size() == 2);
+  CHECK(pending.empty());
+
+  std::vector<layoutfix::PendingWord> capped;
+  for (int i = 0; i < 5; ++i) {
+    layoutfix::PendingWord word;
+    word.forms[1] = std::to_string(i);
+    word.lang = layoutfix::Lang::Uk;
+    word.strokes.push_back(
+        layoutfix::Stroke{1, false, true, word.forms[1], {}, word.forms});
+    layoutfix::remember_pending(capped, std::move(word));
+  }
+  CHECK(capped.size() == 3);
+  CHECK(capped.front().forms[1] == "2");
+  CHECK(capped.back().forms[1] == "4");
+
+  CHECK(layoutfix::is_password_widget(layoutfix::WidgetRole::Password, ""));
+  CHECK(layoutfix::is_password_widget(layoutfix::WidgetRole::Entry, "password"));
+  CHECK(layoutfix::is_password_widget(layoutfix::WidgetRole::Text, "Password"));
+  CHECK(!layoutfix::is_password_widget(layoutfix::WidgetRole::Entry, ""));
+  CHECK(!layoutfix::is_password_widget(layoutfix::WidgetRole::Entry, "text"));
+  CHECK(!layoutfix::is_password_widget(layoutfix::WidgetRole::Other, "pass"));
 
   if (failures != 0) {
     std::cerr << failures << " перевірок не пройшло\n";

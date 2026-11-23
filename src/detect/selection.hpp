@@ -26,7 +26,8 @@ std::string map_layout_text(std::string_view text, const LayoutMaps& maps,
 SelectionResult convert_selection(
     std::string_view text, const LayoutMaps& maps,
     const std::array<const Dictionary*, 3>& dictionaries,
-    const std::array<bool, 3>& active_languages, Lang current_language);
+    const std::array<bool, 3>& active_languages, Lang current_language,
+    bool force = true);
 
 bool is_copy_line_editor(std::string_view wm_class, std::string_view wm_name);
 bool has_vscode_empty_selection_marker(std::string_view raw_custom_data);

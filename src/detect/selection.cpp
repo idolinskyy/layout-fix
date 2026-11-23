@@ -2,6 +2,7 @@
 
 #include "utf8.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <vector>
@@ -140,7 +141,8 @@ std::string map_layout_text(std::string_view text, const LayoutMaps& maps,
 SelectionResult convert_selection(
     std::string_view text, const LayoutMaps& maps,
     const std::array<const Dictionary*, 3>& dictionaries,
-    const std::array<bool, 3>& active_languages, Lang current_language) {
+    const std::array<bool, 3>& active_languages, Lang current_language,
+    bool force) {
     SelectionResult none;
     if (text.empty()) {
         return none;
@@ -255,6 +257,20 @@ SelectionResult convert_selection(
         }
     }
 
+    std::size_t original_score = 0;
+    const auto original_words = extract_words(text);
+    for (const Lang source : sources) {
+        original_score = std::max(
+            original_score,
+            score_words(original_words, dictionaries[lang_index(source)]));
+    }
+    // Оригінал, який словник приймає не гірше за переклад, не замінюємо.
+    // Нульовий рахунок перекладається лише за явного прохання (force).
+    if (best->score < original_score ||
+        (best->score == original_score && (original_score > 0 || !force))) {
+        return none;
+    }
+
     return SelectionResult{best->mapped, best->target, true};
 }
 
@@ -350,11 +366,31 @@ bool has_vscode_empty_selection_marker(std::string_view raw_custom_data) {
     return false;
 }
 
+bool has_vscode_explicit_selection_marker(std::string_view raw_custom_data) {
+    if (raw_custom_data.empty()) {
+        return false;
+    }
+    static constexpr std::string_view kMarkers[] = {
+        "\"isFromEmptySelection\":false",
+        "\"isFromEmptySelection\": false",
+    };
+    for (const auto marker : kMarkers) {
+        if (raw_custom_data.find(marker) != std::string_view::npos ||
+            contains_utf16le_ascii(raw_custom_data, marker)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool looks_like_empty_line_copy(std::string_view selected,
                                 std::string_view primary, bool copy_line_editor,
                                 std::string_view web_custom_data) {
     if (has_vscode_empty_selection_marker(web_custom_data)) {
         return true;
+    }
+    if (has_vscode_explicit_selection_marker(web_custom_data)) {
+        return false;
     }
     if (copy_line_editor && is_single_line_with_trailing_newline(selected) &&
         primary != selected) {

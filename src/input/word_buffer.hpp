@@ -23,7 +23,9 @@ public:
     void push_word(unsigned keycode, bool shift, Lang current_language,
                    std::array<std::string, 3> forms);
     void push_boundary(unsigned keycode, bool shift, std::string text);
-    void pop();
+    void assign(int group, Lang language, std::array<std::string, 3> forms,
+                std::vector<Stroke> strokes);
+    bool pop();
 
     bool empty() const { return strokes_.empty(); }
     int group() const { return group_; }
