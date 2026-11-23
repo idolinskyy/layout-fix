@@ -61,7 +61,9 @@ cat > "$docs_dir/RUNTIME-DEPENDENCIES.txt" <<'EOF'
 This build targets Linux/X11 with Cinnamon.
 It requires Qt 6 Widgets (system libqt6widgets6t64/libqt6widgets6 and qt6-qpa-plugins),
 Hunspell runtime and en_US, uk_UA, and ru_RU dictionaries, plus the X11, XTest,
-xkbcommon, and GLib runtime libraries.
+xkbcommon, GLib, and AT-SPI (libatspi2.0-0) runtime libraries.
+Password-field detection uses the session accessibility bus. The daemon still
+starts when that bus is absent; correction in password fields stays active then.
 If built against a custom Qt installation outside the system library path,
 set QT_PREFIX to its gcc_64 directory before starting layout-fix.
 EOF

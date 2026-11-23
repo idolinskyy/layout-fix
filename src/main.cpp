@@ -18,10 +18,29 @@ namespace {
 void print_help() {
     std::cerr << "layout-fix — виправляє слово, набране не в тій розкладці (X11, Cinnamon)\n"
                  "\n"
-                 "  layout-fix [--config ШЛЯХ] [--debug-keys] [--check]\n"
+                 "  layout-fix [--config ШЛЯХ] [--debug-keys] [--check] [--logs]\n"
                  "\n"
                  "  --check        перевірити X11, розкладки і словники, потім вийти\n"
-                 "  --debug-keys   писати набрані символи в stderr. Для звичайної роботи не вмикати\n";
+                 "  --logs         показати журнал і вийти\n"
+                 "  --debug-keys   писати набрані символи в stderr. У файл журналу вони не потрапляють\n";
+}
+
+int print_logs() {
+    const std::string path = layoutfix::log::default_path();
+    if (path.empty()) {
+        std::cerr << "не вдалося визначити шлях журналу\n";
+        return 1;
+    }
+    const std::string text = layoutfix::log::read_text(path);
+    if (text.empty()) {
+        std::cout << "журнал порожній: " << path << '\n';
+        return 0;
+    }
+    std::cout << text;
+    if (text.back() != '\n') {
+        std::cout << '\n';
+    }
+    return 0;
 }
 
 class InstanceLock {
@@ -61,6 +80,7 @@ int main(int argc, char** argv) {
     bool config_path_explicit = false;
     bool debug_keys = false;
     bool check_only = false;
+    bool show_logs = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -75,6 +95,10 @@ int main(int argc, char** argv) {
             check_only = true;
             continue;
         }
+        if (arg == "--logs") {
+            show_logs = true;
+            continue;
+        }
         if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
             config_path_explicit = true;
@@ -85,10 +109,23 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    if (show_logs) {
+        return print_logs();
+    }
+
+    const std::string log_path = layoutfix::log::default_path();
+    const bool log_ready = !log_path.empty() && layoutfix::log::open_file(log_path);
+    if (!log_ready) {
+        layoutfix::log::error("не вдалося відкрити файл журналу");
+    }
+
     InstanceLock lock;
     if (!check_only && !lock.acquire()) {
         layoutfix::report_to_user("вже запущено інший примірник");
         return 0;
+    }
+    if (log_ready) {
+        layoutfix::log::info("журнал: " + log_path);
     }
 
     auto config = layoutfix::load_config(config_path, debug_keys);

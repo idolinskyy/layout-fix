@@ -35,6 +35,33 @@ inline bool is_password_widget(WidgetRole role, std::string_view text_input_type
     return equals_password(text_input_type);
 }
 
+// Знімок уже відомих властивостей. Невідома роль тут не є паролем.
+struct FocusSnapshot {
+    bool defunct = false;
+    bool role_known = false;
+    WidgetRole role = WidgetRole::Other;
+    bool attribute_known = false;
+    std::string_view text_input_type;
+};
+
+inline bool focus_snapshot_is_password(const FocusSnapshot& snap) {
+    if (snap.defunct || !snap.role_known) {
+        return false;
+    }
+    if (snap.role == WidgetRole::Password) {
+        return true;
+    }
+    if (!snap.attribute_known) {
+        return false;
+    }
+    return is_password_widget(snap.role, snap.text_input_type);
+}
+
+// Втрата фокуса знімає паузу для поля пароля або для віджета, який уже зник.
+inline bool focus_loss_ends_password(const FocusSnapshot& snap) {
+    return snap.defunct || focus_snapshot_is_password(snap);
+}
+
 class PasswordFocus {
 public:
     PasswordFocus();

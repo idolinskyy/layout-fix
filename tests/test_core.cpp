@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include "log.hpp"
 #include "detect/detector.hpp"
 #include "a11y/password.hpp"
 #include "detect/dictionary.hpp"
@@ -789,6 +790,58 @@ int main() {
   CHECK(!layoutfix::is_password_widget(layoutfix::WidgetRole::Entry, ""));
   CHECK(!layoutfix::is_password_widget(layoutfix::WidgetRole::Entry, "text"));
   CHECK(!layoutfix::is_password_widget(layoutfix::WidgetRole::Other, "pass"));
+  layoutfix::FocusSnapshot password;
+  password.role_known = true;
+  password.role = layoutfix::WidgetRole::Password;
+  CHECK(layoutfix::focus_snapshot_is_password(password));
+  CHECK(layoutfix::focus_loss_ends_password(password));
+  layoutfix::FocusSnapshot entry_password;
+  entry_password.role_known = true;
+  entry_password.role = layoutfix::WidgetRole::Entry;
+  entry_password.attribute_known = true;
+  entry_password.text_input_type = "password";
+  CHECK(layoutfix::focus_snapshot_is_password(entry_password));
+  layoutfix::FocusSnapshot unknown;
+  CHECK(!layoutfix::focus_snapshot_is_password(unknown));
+  CHECK(!layoutfix::focus_loss_ends_password(unknown));
+  layoutfix::FocusSnapshot gone;
+  gone.defunct = true;
+  gone.role_known = true;
+  gone.role = layoutfix::WidgetRole::Password;
+  CHECK(!layoutfix::focus_snapshot_is_password(gone));
+  CHECK(layoutfix::focus_loss_ends_password(gone));
+  layoutfix::FocusSnapshot plain;
+  plain.role_known = true;
+  plain.role = layoutfix::WidgetRole::Entry;
+  plain.attribute_known = true;
+  plain.text_input_type = "text";
+  CHECK(!layoutfix::focus_snapshot_is_password(plain));
+  CHECK(!layoutfix::focus_loss_ends_password(plain));
+
+  const auto log_dir = std::filesystem::temp_directory_path() /
+                       ("layout-fix-log-test-" +
+                        std::to_string(std::chrono::steady_clock::now()
+                                           .time_since_epoch()
+                                           .count()));
+  const auto log_path = (log_dir / "layout-fix.log").string();
+  CHECK(layoutfix::log::open_file(log_path, 120));
+  layoutfix::log::info("ROTATE-AAA");
+  layoutfix::log::error("ROTATE-ERR");
+  layoutfix::log::set_debug_keys(true);
+  layoutfix::log::keys("SECRET-KEYS");
+  layoutfix::log::set_debug_keys(false);
+  layoutfix::log::info("ROTATE-BBB");
+  const std::string logged = layoutfix::log::read_text(log_path);
+  layoutfix::log::close_file();
+  CHECK(logged.find("layout-fix: ROTATE-AAA") != std::string::npos);
+  CHECK(logged.find("layout-fix: помилка: ROTATE-ERR") != std::string::npos);
+  CHECK(logged.find("layout-fix: ROTATE-BBB") != std::string::npos);
+  CHECK(logged.find("ROTATE-AAA") < logged.find("ROTATE-BBB"));
+  CHECK(logged.find("SECRET-KEYS") == std::string::npos);
+  CHECK(std::filesystem::is_regular_file(log_path + ".1"));
+  CHECK(layoutfix::log::default_path().find("layout-fix.log") != std::string::npos);
+  std::error_code log_removed;
+  std::filesystem::remove_all(log_dir, log_removed);
 
   if (failures != 0) {
     std::cerr << failures << " перевірок не пройшло\n";

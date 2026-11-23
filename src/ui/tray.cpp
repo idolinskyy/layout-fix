@@ -3,6 +3,7 @@
 #include "log.hpp"
 
 #ifdef LAYOUT_FIX_HAVE_QT_TRAY
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QColor>
@@ -23,6 +24,7 @@
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QSystemTrayIcon>
 #include <QTimer>
@@ -128,6 +130,7 @@ struct Tray::Impl {
   QMenu *language_menu = nullptr;
   std::vector<std::pair<Lang, QAction *>> language_actions;
   QAction *settings_action = nullptr;
+  QAction *logs_action = nullptr;
   QAction *about_action = nullptr;
   QAction *quit_action = nullptr;
   TrayCallbacks callbacks;
@@ -147,6 +150,7 @@ struct Tray::Impl {
     pause_action = tray_menu.addAction("Пауза");
     language_menu = tray_menu.addMenu("Перемкнути розкладку");
     settings_action = tray_menu.addAction("Налаштування…");
+    logs_action = tray_menu.addAction("Журнал…");
     about_action = tray_menu.addAction("Про layout-fix");
     tray_menu.addSeparator();
     quit_action = tray_menu.addAction("Вийти");
@@ -164,6 +168,7 @@ struct Tray::Impl {
     });
     QObject::connect(settings_action, &QAction::triggered,
                      [this] { open_settings(); });
+    QObject::connect(logs_action, &QAction::triggered, [this] { open_logs(); });
     QObject::connect(about_action, &QAction::triggered,
                      [this] { open_about(); });
     QObject::connect(quit_action, &QAction::triggered, [this] {
@@ -329,6 +334,81 @@ struct Tray::Impl {
 
     callbacks.apply_config(std::move(updated));
     log::info("налаштування збережено й застосовано");
+  }
+
+  void open_logs() {
+    if (callbacks.on_modal_pause) {
+      callbacks.on_modal_pause(true);
+    }
+
+    QDialog dialog;
+    dialog.setWindowTitle(QStringLiteral("Журнал layout-fix"));
+    dialog.resize(720, 480);
+    const QString path = QString::fromStdString(log::default_path());
+    auto *path_label = new QLabel(QStringLiteral("Файл: %1").arg(path));
+    path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    path_label->setWordWrap(true);
+    auto *hint = new QLabel(QStringLiteral(
+        "Службові повідомлення. Набрані символи сюди не записуються. "
+        "У терміналі: layout-fix --logs"));
+    hint->setWordWrap(true);
+
+    auto *view = new QPlainTextEdit;
+    view->setReadOnly(true);
+    view->setLineWrapMode(QPlainTextEdit::NoWrap);
+    QFont mono;
+    mono.setStyleHint(QFont::Monospace);
+    mono.setFamily(QStringLiteral("DejaVu Sans Mono"));
+    mono.setPointSize(10);
+    view->setFont(mono);
+
+    auto reload = [view](bool stick_to_end) {
+      const std::string raw = log::read_text(log::default_path());
+      const QString text =
+          raw.empty() ? QStringLiteral("Журнал порожній.")
+                      : QString::fromUtf8(raw.data(),
+                                          static_cast<qsizetype>(raw.size()));
+      if (text == view->toPlainText()) {
+        return;
+      }
+      auto *bar = view->verticalScrollBar();
+      const int gap = bar->maximum() - bar->value();
+      const bool at_end = bar->maximum() == 0 || gap <= 8;
+      view->setPlainText(text);
+      if (stick_to_end || at_end) {
+        bar->setValue(bar->maximum());
+      }
+    };
+    reload(true);
+    QTimer::singleShot(0, &dialog, [view] {
+      auto *bar = view->verticalScrollBar();
+      bar->setValue(bar->maximum());
+    });
+
+    auto *timer = new QTimer(&dialog);
+    QObject::connect(timer, &QTimer::timeout, &dialog,
+                     [reload] { reload(false); });
+    timer->start(1000);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    auto *refresh = buttons->addButton(QStringLiteral("Оновити"),
+                                       QDialogButtonBox::ActionRole);
+    QObject::connect(refresh, &QAbstractButton::clicked, &dialog,
+                     [reload] { reload(true); });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
+                     &QDialog::reject);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(path_label);
+    layout->addWidget(hint);
+    layout->addWidget(view, 1);
+    layout->addWidget(buttons);
+
+    InputPump pump(callbacks.pump_ignored_input);
+    dialog.exec();
+    if (callbacks.on_modal_pause) {
+      callbacks.on_modal_pause(false);
+    }
   }
 
   void open_about() {

@@ -1,18 +1,18 @@
 # layout-fix: архітектура та нотатки розробника
 
-Стан на 2026-11-21 (v0.3.1). Фоновий демон для X11 і Cinnamon; `build/` і `dist/` ігноруються в git.
+Стан на 2026-11-23 (v0.9.0). Фоновий демон для X11 і Cinnamon; `build/` і `dist/` ігноруються в git.
 
 ## Що це
 
 Фоновий C++20-демон для X11 і Cinnamon. На межі слова він перевіряє набрані клавіші за словниками Hunspell (English US, Ukrainian, опційно Russian) і при єдиному словниковому збігу перемикає джерело вводу Cinnamon та підставляє слово або контекст до 4 слів. Також підтримує виправлення виділеного тексту й примусове виправлення останнього слова (`Alt+Pause`), скасування (`Shift+Pause`) та сувору паузу (`Pause`).
 
-Натискання не записуються у файл. У звичайному режимі журнал містить лише службові повідомлення; текст клавіш з'являється у stderr тільки з `--debug-keys`.
+Натискання не записуються у файл. Службовий журнал дублюється в `~/.local/state/layout-fix/layout-fix.log` і досі йде в stderr; текст клавіш з'являється в stderr тільки з `--debug-keys` і в файл не потрапляє. Перегляд: `layout-fix --logs` і пункт «Журнал…» у треї.
 
 ## Куди дивитися в коді
 
 | Файл                         | Роль                                                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `src/main.cpp`               | аргументи CLI (`--config`, `--check`, `--debug-keys`), single-instance lock у `~/.cache/layout-fix.lock` |
+| `src/main.cpp`               | аргументи CLI (`--config`, `--check`, `--logs`, `--debug-keys`), single-instance lock у `~/.cache/layout-fix.lock` |
 | `src/app.cpp`                | головний `poll`-цикл, рішення, автовиправлення (1–4 слова), примусова конвертація, пауза, скасування   |
 | `src/ui/tray.cpp`            | ізольований модуль Qt 6 (трей, меню мов, діалог налаштувань із `QKeySequenceEdit`, About); no-op без Qt |
 | `src/tray_state.hpp`         | визначення стану трея (`Active`, `Paused`, `Desynced`, `PausedDesynced`)                               |
@@ -26,7 +26,8 @@
 | `src/x11/retype.cpp`         | Backspace, повтор keycode і `Ctrl+C`/`Ctrl+V` через XTest (з пре-відпусканням затиснутих клавіш)       |
 | `src/x11/clipboard.cpp`      | читання/володіння X11 `CLIPBOARD` (`UTF8_STRING`/`XA_STRING`), `PRIMARY` і custom targets              |
 | `src/x11/focus.cpp`          | `_NET_ACTIVE_WINDOW`, `WM_CLASS` і перевірка винятків вікон                                            |
-| `src/layout/groups.cpp`      | XKB-групи (`en`/`uk`/`ru` за клавішею `S`), `translate`, `find_key` і таблиці `LayoutMaps`             |
+| `src/layout/groups.cpp`      | XKB-групи (`en`/`uk`/`ru` за літерами групи, не за позицією), `translate`, `find_key`, `LayoutMaps`    |
+| `src/a11y/password.cpp`      | пауза виправлення у полі пароля через AT-SPI (немає шини — демон працює далі)                        |
 | `src/layout/cinnamon.cpp`    | D-Bus `org.Cinnamon`: `GetInputSources`, `ActivateInputSourceIndex`, сигнал `InputSourcesChanged`      |
 | `src/detect/dictionary.cpp`  | словники Hunspell (`.dic`/`.aff`) із fallback на точні основи                                          |
 | `src/detect/detector.cpp`    | `unique_language_candidate` (1–4 слова, пунктуаційні літери, `ignore-words`), `choose_forced_language` |
